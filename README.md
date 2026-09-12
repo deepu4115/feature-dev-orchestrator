@@ -237,6 +237,22 @@ feature-dev fail T001
 feature-dev reconcile
 ```
 
+### Step 8: Use autonomous orchestration (recommended)
+
+If you want minimal manual intervention, use:
+
+```bash
+feature-dev execute-next --json
+```
+
+For bounded multi-step autonomy in one command, use:
+
+```bash
+feature-dev execute-loop --json
+```
+
+These commands run reconciliation, choose deterministic tasks, and stop safely when human code changes are needed.
+
 ## Example flow
 
 Here is a typical beginner flow:
@@ -248,10 +264,12 @@ feature-dev discover
 feature-dev repositories
 feature-dev status
 feature-dev doctor
-feature-dev ready
+feature-dev execute-loop --json
 ```
 
 This is the core orchestration loop used for dependency-aware execution and resume across sessions.
+
+Manual commands (`start`, `verify`, `complete`) are still available when you want explicit control over each state transition.
 
 ## Commands overview
 
@@ -271,6 +289,8 @@ feature-dev complete T001
 feature-dev fail T001
 feature-dev reconcile
 feature-dev verify-workspace
+feature-dev execute-next --json
+feature-dev execute-loop --json
 ```
 
 ### `feature-dev version`
@@ -318,6 +338,50 @@ Repairs stale task state to support safe resume.
 ### `feature-dev verify-workspace`
 Runs verification for all repository-scoped tasks in `IMPLEMENTED` or `VERIFYING` state.
 
+### `feature-dev execute-next`
+Runs one autonomous orchestration step with minimal manual intervention.
+
+What it does in one command:
+
+- reconciles persisted state
+- chooses the next deterministic task (or uses `--task`)
+- starts a ready task or verifies an implemented task
+- marks verified tasks as `DONE` on pass
+- returns structured output for the coding agent
+
+Useful flags:
+
+- `--json` for machine-readable output
+- `--dry-run` to preview without changing state
+- `--task T001` to force a specific task
+- `--level brief|full` to control context size
+- `--max-files`, `--max-chars`, `--max-file-chars` for context budgeting
+
+Token-efficient defaults:
+
+- `--level brief` minimizes context for fast orchestration decisions
+- `--level full` adds budgeted snippets only when needed
+
+### `feature-dev execute-loop`
+Runs multiple autonomous steps in a bounded loop and stops safely when coding input is needed or failure budgets are reached.
+
+What it adds over `execute-next`:
+
+- bounded multi-step execution in a single command
+- safe stop when task reaches `RUNNING` and needs implementation changes
+- configurable verification failure budget to prevent runaway retries
+
+Useful flags:
+
+- `--max-steps` maximum number of autonomous steps per run (default 3)
+- `--max-verify-failures` stop after repeated verify failures (default 2)
+- also supports all context and output flags from `execute-next`
+
+Practical use:
+
+- use `--json` for agent-driven parsing
+- combine `--max-steps` and `--max-verify-failures` to keep latency and retries bounded
+
 ## Current status of the project
 
 This repository includes the core orchestration MVP and early hardening. It includes:
@@ -327,8 +391,11 @@ This repository includes the core orchestration MVP and early hardening. It incl
 - repository registry persistence
 - task state machine and dependency readiness
 - repository-aware context and verification
+- context budgeting (`brief`/`full` + hard character/file caps)
+- rolling task summaries in `.feature/state/task-summaries.jsonl`
 - lifecycle commands (`start`, `complete`, `fail`)
 - reconciliation for stale/incomplete sessions
+- autonomous bounded execution commands (`execute-next`, `execute-loop`)
 - tests for workspace, task transitions, DAG behavior, and reconciliation
 
 The next implementation stages are planned to include:
@@ -423,6 +490,7 @@ go build ./cmd/feature-dev
 ./feature-dev repositories
 ./feature-dev status
 ./feature-dev doctor
+./feature-dev execute-loop --json
 ```
 
 That is the beginner-friendly path to getting started with the tool.

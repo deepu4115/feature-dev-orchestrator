@@ -59,7 +59,7 @@ func CaptureRepositoryState(repoPath string) (RepositoryState, error) {
 
 	head, err := GitOutput(repoPath, "rev-parse", "HEAD")
 	if err != nil {
-		return repoState, err
+		head = ""
 	}
 	repoState.Head = head
 

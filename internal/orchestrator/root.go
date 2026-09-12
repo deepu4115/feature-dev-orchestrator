@@ -32,6 +32,8 @@ func BuildRootCommand() *cobra.Command {
 	root.AddCommand(BuildFailTaskCommand())
 	root.AddCommand(BuildReconcileCommand())
 	root.AddCommand(BuildVerifyWorkspaceCommand())
+	root.AddCommand(BuildExecuteNextCommand())
+	root.AddCommand(BuildExecuteLoopCommand())
 
 	return root
 }
