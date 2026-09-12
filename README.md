@@ -113,6 +113,177 @@ The tool keeps orchestration metadata in `.feature`, which is reserved for workf
 ### 4. Deterministic behavior
 The tool is designed to behave consistently and predictably, instead of depending on hidden agent state or ad hoc assumptions.
 
+## `.feature` Lifecycle Example
+
+The `.feature` directory is created by `feature-dev init` at the workspace
+root. The following example shows a multi-repository feature after planning,
+implementation, verification, and completion:
+
+```text
+my-feature-workspace/
+├── PLAN.md
+├── .feature/
+│   ├── config.yaml
+│   ├── repositories.json
+│   ├── workflow.yaml
+│   ├── tasks/
+│   │   └── tasks.json
+│   ├── state/
+│   │   └── task-summaries.jsonl
+│   ├── context/
+│   │   └──                          # reserved for generated context
+│   ├── artifacts/
+│   │   ├── verify-t001-<timestamp>.json
+│   │   └── verify-t002-<timestamp>.json
+│   ├── reviews/
+│   │   └──                          # reserved for review artifacts
+│   └── logs/
+│       └──                          # reserved for workflow logs
+├── checkout-web/
+│   └── .git/
+├── payments-api/
+│   └── .git/
+└── shared-contracts/
+		└── .git/
+```
+
+`init` creates the directories and default `config.yaml`, empty
+`repositories.json`, and `workflow.yaml`. The other files appear as the
+corresponding commands need them. Empty reserved directories may remain empty
+after a successful run.
+
+### Representative schemas
+
+`.feature/config.yaml` stores workspace discovery settings:
+
+```yaml
+schema_version: "1.0"
+repository_discovery:
+	mode: auto
+	include:
+		- ./*
+	exclude:
+		- .git
+		- node_modules
+		- dist
+		- build
+		- target
+```
+
+`.feature/repositories.json` is the discovered repository registry:
+
+```json
+[
+	{
+		"id": "payments-api",
+		"path": "payments-api",
+		"git_root": "payments-api",
+		"mode": "read_write"
+	},
+	{
+		"id": "checkout-web",
+		"path": "checkout-web",
+		"git_root": "checkout-web",
+		"mode": "read_write"
+	}
+]
+```
+
+`.feature/tasks/tasks.json` is the persisted task graph. The agent creates or
+updates it from `PLAN.md`; the CLI owns status transitions:
+
+```json
+[
+	{
+		"id": "T001",
+		"title": "Add authorization contract",
+		"repository": "shared-contracts",
+		"status": "DONE",
+		"dependencies": [],
+		"acceptance_criteria": [
+			"The authorization request and response types are available to consumers."
+		],
+		"verification": [
+			{ "command": "npm test" }
+		]
+	},
+	{
+		"id": "T002",
+		"title": "Implement API authorization",
+		"repository": "payments-api",
+		"status": "DONE",
+		"dependencies": ["T001"],
+		"acceptance_criteria": [
+			"The API validates authorization requests and returns the documented response."
+		],
+		"verification": [
+			{ "command": "go test ./..." }
+		]
+	}
+]
+```
+
+Each line in `.feature/state/task-summaries.jsonl` records a lifecycle event:
+
+```json
+{"timestamp":"2026-09-12T12:00:00Z","task_id":"T002","repository":"payments-api","status":"RUNNING","event":"execute_next_started","message":"execute-next moved task to RUNNING"}
+{"timestamp":"2026-09-12T12:08:00Z","task_id":"T002","repository":"payments-api","status":"DONE","event":"verification_passed","message":"verification command completed successfully"}
+```
+
+Each verification writes a JSON artifact under `.feature/artifacts` containing
+the task, repository, command, working directory, exit code, output, and
+execution timestamp:
+
+```json
+{
+	"repository_id": "payments-api",
+	"working_directory": "payments-api",
+	"command": "go test ./...",
+	"timeout_seconds": 300,
+	"exit_code": 0,
+	"task_id": "T002",
+	"output": "ok   payments-api/...",
+	"executed_at": "2026-09-12T12:08:00Z"
+}
+```
+
+### Command flow
+
+```mermaid
+flowchart TD
+		A[PLAN.md] --> B[feature-dev init]
+		B --> C[.feature scaffold]
+		C --> D[feature-dev discover]
+		D --> E[repositories.json]
+		E --> F[Agent creates tasks.json from PLAN.md]
+		F --> G[feature-dev graph]
+		G --> H[feature-dev reconcile]
+		H --> I[feature-dev execute-loop --json]
+		I --> J{Stop reason}
+		J -->|awaiting_code_changes| K[Agent edits assigned repository]
+		K --> L[Run repository verification]
+		L --> I
+		J -->|verification failure| M[Inspect artifact and repair]
+		M --> I
+		J -->|all tasks DONE| N[Final cross-repository review]
+```
+
+### Typical command sequence
+
+```bash
+feature-dev init
+feature-dev discover
+feature-dev doctor
+feature-dev agent-hint --json
+# Agent reads PLAN.md and creates .feature/tasks/tasks.json.
+feature-dev graph
+feature-dev reconcile
+feature-dev execute-loop --json
+# Agent implements the returned task in its assigned repository.
+# Repeat verification and execute-loop until every task is DONE.
+feature-dev status --json
+```
+
 ## Installation
 
 ### Prerequisites
