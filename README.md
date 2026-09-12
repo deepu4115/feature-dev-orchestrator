@@ -223,6 +223,12 @@ feature-dev task add T001 "Implement feature slice"
 feature-dev task add T002 "Add tests"
 ```
 
+The `task add` command creates workspace tasks. For repository-scoped work,
+edit `.feature/tasks/tasks.json` directly after adding the tasks so you can
+provide the repository assignment, dependencies, description, and verification
+command. The repository name must match an entry in
+`.feature/repositories.json`.
+
 ### Step 7: Validate before execution
 
 Run these checks before starting work:
@@ -304,6 +310,83 @@ This is the core orchestration loop used for dependency-aware execution and resu
 
 Rerun `feature-dev execute-loop --json` after each code-change pass until all planned tasks are complete.
 
+## Using with GitHub Copilot or Cursor
+
+The tool does not run inside Copilot or Cursor as an extension. It is a
+workspace-level CLI that the coding agent runs from the integrated terminal.
+The agent remains responsible for reasoning and editing code; `feature-dev`
+keeps task selection, repository ownership, state transitions, and verification
+deterministic.
+
+Open the same workspace folder in VS Code with Copilot or in Cursor, then give
+the agent a request like this:
+
+```text
+Use the feature-dev CLI as the orchestration layer for this feature.
+Run `feature-dev doctor`, then `feature-dev reconcile` and
+`feature-dev execute-loop --json`.
+
+When the result says `awaiting_code_changes`, inspect the returned task and
+repository, make the required changes only in that repository, run the
+repository's tests, and run `feature-dev execute-loop --json` again.
+When verification fails, inspect the verification output and artifacts, fix the
+underlying issue, and rerun the loop. Continue until all tasks are DONE or
+report the exact stop reason and task that needs input.
+```
+
+A normal agent pass looks like this:
+
+1. Run `feature-dev execute-loop --json` from the workspace root.
+2. Read the JSON `status`, `task`, and `repository` fields.
+3. If the status is `awaiting_code_changes`, open the assigned repository and
+	implement that task. Do not assume the workspace root is the repository.
+4. Run the repository's tests or the verification command configured for the
+	task.
+5. Run `feature-dev execute-loop --json` again so the orchestrator records the
+	result and selects the next dependency-ready task.
+
+Useful manual commands while working with an agent are:
+
+```bash
+feature-dev status --json
+feature-dev repositories --json
+feature-dev ready --json
+feature-dev agent-hint --json
+feature-dev context T001 --level brief --json
+feature-dev execute-next --json
+```
+
+Use `execute-next` when you want to supervise one transition at a time. Use
+`execute-loop` for the normal bounded workflow. The agent should treat a stop
+reason such as `awaiting_code_changes`, `verify_failure_budget_reached`,
+`no_executable_task`, or `max_steps_reached` as an instruction about what to do
+next, rather than repeatedly invoking the command without inspecting the
+result.
+
+### Copilot in VS Code
+
+1. Open the orchestration workspace in VS Code.
+2. Open Copilot Chat or Agent mode with the integrated terminal available.
+3. Paste the operating procedure above, or ask Copilot to use
+	`feature-dev execute-loop --json` for the current feature.
+4. Review the proposed edits and terminal commands. Copilot should edit the
+	repository named by the CLI result, then return to the workspace root for
+	the next orchestration command.
+
+### Cursor
+
+1. Open the orchestration workspace as the Cursor project.
+2. Ensure the integrated terminal starts at the workspace root and the
+	`feature-dev` binary is on `PATH`.
+3. Give Cursor the same operating procedure and ask it to preserve the
+	`.feature` state directory.
+4. Let Cursor work on one returned task at a time, checking the JSON result
+	after each coding and verification pass.
+
+Do not ask the agent to invent task state by changing statuses manually unless
+you are using the explicit manual commands. The CLI is the source of truth for
+transitions and resume behavior.
+
 ## Commands overview
 
 ```bash
@@ -313,6 +396,7 @@ feature-dev init
 feature-dev discover
 feature-dev repositories
 feature-dev status
+feature-dev agent-hint
 feature-dev graph
 feature-dev ready
 feature-dev start T001
@@ -343,6 +427,15 @@ Shows the discovered repository registry.
 
 ### `feature-dev status`
 Shows basic workspace state information.
+
+### `feature-dev agent-hint`
+Emits a structured routing hint for coding agents, including suggested next command, prompt text, trigger phrases, and orchestration readiness signals.
+
+Use JSON mode for agent parsing:
+
+```bash
+feature-dev agent-hint --json
+```
 
 ### `feature-dev ready`
 Checks if any tasks are ready for execution.

@@ -22,6 +22,7 @@ func BuildRootCommand() *cobra.Command {
 	root.AddCommand(BuildDiscoverCommand())
 	root.AddCommand(BuildRepositoriesCommand())
 	root.AddCommand(BuildStatusCommand())
+	root.AddCommand(BuildAgentHintCommand())
 	root.AddCommand(BuildGraphCommand())
 	root.AddCommand(BuildReadyCommand())
 	root.AddCommand(BuildStartTaskCommand())

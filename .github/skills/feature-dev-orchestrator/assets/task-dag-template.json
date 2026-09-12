@@ -1,0 +1,26 @@
+{
+  "tasks": [
+    {
+      "id": "T001",
+      "title": "Define baseline behavior",
+      "repository": "repo-a",
+      "dependencies": [],
+      "description": "Implement baseline behavior with explicit acceptance criteria.",
+      "verify": {
+        "command": "go test ./...",
+        "working_directory": "."
+      }
+    },
+    {
+      "id": "T002",
+      "title": "Integrate downstream behavior",
+      "repository": "repo-b",
+      "dependencies": ["T001"],
+      "description": "Add integration behavior that depends on T001.",
+      "verify": {
+        "command": "npm test",
+        "working_directory": "."
+      }
+    }
+  ]
+}
