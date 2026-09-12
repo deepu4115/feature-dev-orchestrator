@@ -212,50 +212,80 @@ feature-dev doctor
 
 This validates that the workspace is properly configured.
 
-### Step 6: Ask for ready work
+### Step 6: Create or import tasks
+
+Make sure tasks exist in `.feature/tasks/tasks.json`.
+
+If needed, add tasks manually:
 
 ```bash
-feature-dev ready
+feature-dev task add T001 "Implement feature slice"
+feature-dev task add T002 "Add tests"
 ```
 
-This command returns tasks that are unblocked by dependencies and eligible for execution.
+### Step 7: Validate before execution
 
-### Step 7: Move tasks through the lifecycle
+Run these checks before starting work:
 
-Use these commands in order:
+```bash
+feature-dev reconcile
+feature-dev ready
+feature-dev graph
+```
+
+What each command does:
+
+- `reconcile`: repairs stale or interrupted task state
+- `ready`: shows tasks eligible for execution
+- `graph`: validates dependency relationships
+
+### Step 8: Execute work (recommended autonomous mode)
+
+For a single safe autonomous step:
+
+```bash
+feature-dev execute-next --json
+```
+
+For bounded multi-step autonomous execution:
+
+```bash
+feature-dev execute-loop --json
+```
+
+Use `execute-loop` as default and rerun it after each coding pass.
+
+### Step 9: Handle stop reasons
+
+When `execute-loop` stops, use this mapping:
+
+- `awaiting_code_changes`: implement code changes, then rerun `feature-dev execute-loop --json`
+- `verify_failure_budget_reached`: inspect verify output/artifacts, fix issues, then rerun loop
+- `no_executable_task`: add/fix tasks or dependencies, run `reconcile`, rerun loop
+- `max_steps_reached`: rerun loop or increase `--max-steps`
+
+### Step 10: Optional manual mode
+
+Use manual mode when you need explicit control over each transition:
 
 ```bash
 feature-dev start T001
+feature-dev context T001 --level brief --json
+# implement code changes
 feature-dev verify T001
 feature-dev complete T001
 ```
 
-If work fails or needs rework:
+If work fails:
 
 ```bash
 feature-dev fail T001
 feature-dev reconcile
 ```
 
-### Step 8: Use autonomous orchestration (recommended)
-
-If you want minimal manual intervention, use:
-
-```bash
-feature-dev execute-next --json
-```
-
-For bounded multi-step autonomy in one command, use:
-
-```bash
-feature-dev execute-loop --json
-```
-
-These commands run reconciliation, choose deterministic tasks, and stop safely when human code changes are needed.
-
 ## Example flow
 
-Here is a typical beginner flow:
+Here is a typical autonomous flow:
 
 ```bash
 cd my-feature-workspace
@@ -264,12 +294,15 @@ feature-dev discover
 feature-dev repositories
 feature-dev status
 feature-dev doctor
+feature-dev reconcile
+feature-dev ready
+feature-dev graph
 feature-dev execute-loop --json
 ```
 
 This is the core orchestration loop used for dependency-aware execution and resume across sessions.
 
-Manual commands (`start`, `verify`, `complete`) are still available when you want explicit control over each state transition.
+Rerun `feature-dev execute-loop --json` after each code-change pass until all planned tasks are complete.
 
 ## Commands overview
 
@@ -381,6 +414,11 @@ Practical use:
 
 - use `--json` for agent-driven parsing
 - combine `--max-steps` and `--max-verify-failures` to keep latency and retries bounded
+
+When to execute which:
+
+- `execute-next`: use for one deterministic step and tighter supervision
+- `execute-loop`: use as the default low-intervention mode
 
 ## Current status of the project
 
