@@ -1,6 +1,6 @@
 ---
 name: feature-dev-orchestrator
-description: 'Use for workspace-native feature orchestration with feature-dev CLI, including task DAG planning, repository assignment, dependency validation, and autonomous execute-loop cycles with minimal manual intervention in Copilot/Cursor. Trigger when user says: use feature-dev command, feature-dev workflow, execute-loop orchestration, or reconcile and continue.'
+description: 'Use for workspace-native feature orchestration with feature-dev CLI and a feature plan such as PLAN.md, including task DAG planning, repository assignment, dependency validation, and autonomous execute-loop cycles with minimal manual intervention in Copilot/Cursor. Trigger when user says: use feature-dev command, implement PLAN.md, feature-dev workflow, execute-loop orchestration, or reconcile and continue.'
 argument-hint: 'Provide feature goal, constraints, and repos in scope; choose quick or thorough planning.'
 user-invocable: true
 ---
@@ -15,6 +15,7 @@ Use this skill when you want the agent to run feature work through the feature-d
 - Agent-driven planning of tasks and dependencies before coding.
 - Repeated execute-loop cycles with bounded verification retries.
 - User prompt includes phrases like "use feature-dev command" or "run feature-dev workflow".
+- User provides a feature plan such as `PLAN.md` and asks the agent to implement it.
 
 ## Required Principles
 1. The CLI is the source of truth for task transitions.
@@ -35,8 +36,9 @@ Run:
 
 If doctor reports issues, fix initialization/discovery first.
 
-### 2) Plan Task Graph (Agent-Owned)
-- Read feature request and relevant code in assigned repositories.
+### 2) Read Plan and Create Task Graph (Agent-Owned)
+- Read the plan file named in the prompt. If the prompt says `PLAN.md`, read `PLAN.md` from the workspace root.
+- Treat the plan as the feature intent and acceptance source; inspect relevant code in assigned repositories to fill in implementation details.
 - Create or update `.feature/tasks/tasks.json`.
 - Ensure each task includes:
   - id
@@ -65,12 +67,12 @@ Interpret stop reasons:
 
 Continue until all tasks are DONE.
 
-### 5) Command-Driven Skill Routing
+### 4) Command-Driven Skill Routing
 - Run `go run ./cmd/feature-dev agent-hint --json` to produce routing hints.
 - If `skill` is `feature-dev-orchestrator`, follow this skill's planning plus execute-loop flow.
 - Use `suggested_next_command` and `reason` to choose the immediate next step.
 
-### 4) Cycle Output Contract
+### 5) Cycle Output Contract
 For every cycle, report:
 1. current status/stop reason
 2. active task id and repository
@@ -84,6 +86,7 @@ For every cycle, report:
 - Do not fabricate completion without CLI transition.
 
 ## Suggested Invocation
-`/feature-dev-orchestrator Implement <feature> with minimal manual intervention.`
+- `/feature-dev-orchestrator Implement PLAN.md using feature-dev orchestration with minimal manual intervention.`
+- `Use feature-dev command to implement PLAN.md. Read the plan, infer the task DAG and dependencies, then continue until all tasks are DONE.`
 
 For detailed branch behavior and loop policy, use [Runbook](./references/runbook.md).

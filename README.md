@@ -334,6 +334,15 @@ underlying issue, and rerun the loop. Continue until all tasks are DONE or
 report the exact stop reason and task that needs input.
 ```
 
+To implement a written plan, name it directly in the prompt:
+
+```text
+Use feature-dev command to Implement PLAN.md.
+Read PLAN.md first, infer the repository-aware task graph and dependencies,
+write .feature/tasks/tasks.json, validate it, and continue execute-loop cycles
+until all tasks are DONE. Only stop for a genuine blocker.
+```
+
 A normal agent pass looks like this:
 
 1. Run `feature-dev execute-loop --json` from the workspace root.
