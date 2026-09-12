@@ -145,6 +145,32 @@ If you want to run it globally:
 go install ./cmd/feature-dev
 ```
 
+Go installs the binary into `$(go env GOPATH)/bin` unless `GOBIN` is set. Add
+that directory to your shell startup files so the command works from every
+workspace:
+
+```bash
+export PATH="$(go env GOPATH)/bin:$PATH"
+```
+
+For a permanent macOS setup, place the export in `.zshenv` and `.zshrc`. If
+you use Bash, place it in `.bashrc` and source `.bashrc` from `.bash_profile`.
+Then restart the terminal or reload the relevant startup file.
+
+Verify the global installation:
+
+```bash
+command -v feature-dev
+feature-dev version
+feature-dev agent-hint --json
+```
+
+The optional helper alias below is convenient for agent routing:
+
+```bash
+alias feature-dev-agent='feature-dev agent-hint --json'
+```
+
 Then you can run it as:
 
 ```bash

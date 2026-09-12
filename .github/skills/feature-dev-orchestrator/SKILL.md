@@ -86,7 +86,30 @@ For every cycle, report:
 - Do not fabricate completion without CLI transition.
 
 ## Suggested Invocation
-- `/feature-dev-orchestrator Implement PLAN.md using feature-dev orchestration with minimal manual intervention.`
-- `Use feature-dev command to implement PLAN.md. Read the plan, infer the task DAG and dependencies, then continue until all tasks are DONE.`
+Use this prompt when starting feature work:
+
+```text
+Use feature-dev command to implement PLAN.md with minimal manual intervention.
+
+Read PLAN.md first and inspect every relevant repository before planning. Infer
+a repository-aware task DAG with explicit dependencies, assign each task to the
+correct repository, and write .feature/tasks/tasks.json. Include observable
+acceptance criteria and a repository-specific verification command for every
+task. Validate the graph before coding.
+
+Then run reconcile and execute-loop --json. When the loop says
+awaiting_code_changes, implement only the assigned task in its assigned
+repository, run its verification command, and resume the loop. When
+verification fails, inspect the output and artifacts, fix the root cause, and
+resume. Continue until every task is DONE.
+
+Before finishing, run a final cross-repository review against PLAN.md, verify
+integration points and tests, and report the completed tasks, repositories,
+verification results, and any remaining risks. Stop only for a genuine blocker.
+```
+
+Short form:
+
+`/feature-dev-orchestrator Implement PLAN.md using feature-dev orchestration.`
 
 For detailed branch behavior and loop policy, use [Runbook](./references/runbook.md).
