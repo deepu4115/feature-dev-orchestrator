@@ -1,0 +1,13 @@
+# Go build output
+bin/
+*.exe
+*.test
+
+# OS/editor files
+.DS_Store
+.vscode/
+
+# Project state
+.feature/
+
+# Dependency cache is not committed
