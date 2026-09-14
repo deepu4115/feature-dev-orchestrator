@@ -1,0 +1,74 @@
+[
+  {
+    "id": "task-product-stock-api",
+    "title": "Implement stock decrement and reservation endpoint in product-service",
+    "repository": "product-service",
+    "status": "DONE",
+    "updated_at": "2026-09-12T18:08:26.777768Z"
+  },
+  {
+    "id": "task-order-cart-get-api",
+    "title": "Implement authenticated GET /cart-items endpoint in order-service",
+    "repository": "order-service",
+    "status": "DONE",
+    "updated_at": "2026-09-12T18:11:52.119316Z"
+  },
+  {
+    "id": "task-order-history-api",
+    "title": "Implement authenticated GET /orders history endpoint in order-service",
+    "repository": "order-service",
+    "status": "DONE",
+    "updated_at": "2026-09-12T18:13:37.399002Z"
+  },
+  {
+    "id": "task-order-creation-flow",
+    "title": "Complete order creation flow with stock reservation and item persistence",
+    "repository": "order-service",
+    "status": "DONE",
+    "dependencies": [
+      "task-product-stock-api",
+      "task-order-cart-get-api"
+    ],
+    "updated_at": "2026-09-12T18:16:31.27443Z"
+  },
+  {
+    "id": "task-error-handling-user",
+    "title": "Standardize error handling and Bean Validation in user-service",
+    "repository": "user-service",
+    "status": "DONE",
+    "updated_at": "2026-09-12T18:17:57.499757Z"
+  },
+  {
+    "id": "task-error-handling-product",
+    "title": "Standardize error handling and Bean Validation in product-service",
+    "repository": "product-service",
+    "status": "DONE",
+    "dependencies": [
+      "task-product-stock-api"
+    ],
+    "updated_at": "2026-09-12T18:19:01.144446Z"
+  },
+  {
+    "id": "task-error-handling-order",
+    "title": "Standardize error handling and Bean Validation in order-service",
+    "repository": "order-service",
+    "status": "DONE",
+    "dependencies": [
+      "task-order-creation-flow",
+      "task-order-history-api"
+    ],
+    "updated_at": "2026-09-12T18:19:52.699326Z"
+  },
+  {
+    "id": "task-verification-tests",
+    "title": "Add comprehensive unit and integration verification tests",
+    "repository": "order-service",
+    "status": "DONE",
+    "dependencies": [
+      "task-error-handling-order",
+      "task-error-handling-product",
+      "task-error-handling-user"
+    ],
+    "updated_at": "2026-09-12T18:26:02.788867Z"
+  }
+]
