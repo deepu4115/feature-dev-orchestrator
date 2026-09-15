@@ -1,0 +1,48 @@
+schema_version: "1.0"
+feature:
+  id: device-health
+  title: Add Device Health API
+plan:
+  revision: 1
+  status: REVIEW_PENDING
+repositories:
+  - id: repo-a
+    relevant: true
+requirements:
+  - id: R001
+    description: Add device health endpoint
+    tasks:
+      - T001
+acceptance_criteria:
+  - id: AC001
+    description: Health endpoint works
+    implementation_tasks:
+      - T001
+    planned_verification:
+      - integration-test
+tasks:
+  - id: T001
+    title: Add health endpoint
+    repository: repo-a
+    verification:
+      - command: go test ./...
+assumptions:
+  - id: A001
+    statement: Shared DTO remains backward compatible
+    confidence: MEDIUM
+    impact: MEDIUM
+risks:
+  - id: RK001
+    level: MEDIUM
+    type: PUBLIC_API
+    description: API surface change
+    mitigation:
+      - add tests
+verification:
+  strategy: repository-aware
+  by_repository:
+    repo-a:
+      - compile
+      - unit tests
+approval:
+  required: true

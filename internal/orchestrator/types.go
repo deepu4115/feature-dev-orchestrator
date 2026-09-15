@@ -1,6 +1,9 @@
 package orchestrator
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 const (
 	DefaultFeatureDir = ".feature"
@@ -53,11 +56,59 @@ type VerificationResult struct {
 	ExecutedAt      time.Time `json:"executed_at" yaml:"executed_at"`
 }
 
+type WorkflowStatus string
+
+const (
+	WorkflowNew            WorkflowStatus = "NEW"
+	WorkflowPlanning       WorkflowStatus = "PLANNING"
+	WorkflowPlanGenerated  WorkflowStatus = "PLAN_GENERATED"
+	WorkflowReviewPending  WorkflowStatus = "REVIEW_PENDING"
+	WorkflowReplanning     WorkflowStatus = "REPLANNING"
+	WorkflowRejected       WorkflowStatus = "REJECTED"
+	WorkflowApproved       WorkflowStatus = "APPROVED"
+	WorkflowExecuting      WorkflowStatus = "EXECUTING"
+	WorkflowVerifying      WorkflowStatus = "VERIFYING"
+	WorkflowRework         WorkflowStatus = "REWORK"
+	WorkflowBlocked        WorkflowStatus = "BLOCKED"
+	WorkflowFailed         WorkflowStatus = "FAILED"
+	WorkflowCompleted      WorkflowStatus = "COMPLETED"
+	WorkflowCancelled      WorkflowStatus = "CANCELLED"
+)
+
+var (
+	ErrPlanNotApproved        = errors.New("current feature plan has not been approved")
+	ErrPlanRevisionMismatch   = errors.New("approved plan revision does not match current revision")
+	ErrStaleRevisionApproval  = errors.New("cannot approve stale plan revision")
+	ErrPlanNotReviewPending   = errors.New("plan is not in REVIEW_PENDING state")
+	ErrPlanValidationFailed   = errors.New("plan validation failed")
+	ErrPlanFingerprintMismatch = errors.New("plan fingerprint does not match approved fingerprint")
+)
+
+type ApprovalHistoryEntry struct {
+	Revision    int            `json:"revision"`
+	Status      string         `json:"status"`
+	Reason      string         `json:"reason,omitempty"`
+	Fingerprint string         `json:"fingerprint,omitempty"`
+	Timestamp   time.Time      `json:"timestamp"`
+}
+
+type WorkflowState struct {
+	SchemaVersion            string                 `json:"schema_version"`
+	CurrentPlanRevision      int                    `json:"current_plan_revision"`
+	ApprovedPlanRevision     *int                   `json:"approved_plan_revision"`
+	ApprovedPlanFingerprint  string                 `json:"approved_plan_fingerprint,omitempty"`
+	WorkflowStatus           WorkflowStatus         `json:"workflow_status"`
+	ApprovalHistory          []ApprovalHistoryEntry `json:"approval_history,omitempty"`
+	UpdatedAt                time.Time              `json:"updated_at"`
+}
+
 type TaskStatus string
 
 const (
-	StatusPlanned     TaskStatus = "PLANNED"
-	StatusReady       TaskStatus = "READY"
+	StatusDraft         TaskStatus = "DRAFT"
+	StatusReviewPending TaskStatus = "REVIEW_PENDING"
+	StatusPlanned       TaskStatus = "PLANNED"
+	StatusReady         TaskStatus = "READY"
 	StatusRunning     TaskStatus = "RUNNING"
 	StatusImplemented TaskStatus = "IMPLEMENTED"
 	StatusVerifying   TaskStatus = "VERIFYING"
@@ -84,6 +135,11 @@ type Task struct {
 	ContextRefs        []string           `json:"context_refs,omitempty" yaml:"context_refs,omitempty"`
 	AcceptanceCriteria []string           `json:"acceptance_criteria,omitempty" yaml:"acceptance_criteria,omitempty"`
 	Verification       []VerificationStep `json:"verification,omitempty" yaml:"verification,omitempty"`
+	VerificationStale  bool               `json:"verification_stale,omitempty" yaml:"verification_stale,omitempty"`
+	RepositoryRationale string            `json:"repository_rationale,omitempty" yaml:"repository_rationale,omitempty"`
+	OwnershipConfidence string            `json:"ownership_confidence,omitempty" yaml:"ownership_confidence,omitempty"`
+	RequirementIDs     []string           `json:"requirement_ids,omitempty" yaml:"requirement_ids,omitempty"`
+	PlannedVerification []string          `json:"planned_verification,omitempty" yaml:"planned_verification,omitempty"`
 	UpdatedAt          time.Time          `json:"updated_at,omitempty" yaml:"updated_at,omitempty"`
 }
 
@@ -137,9 +193,20 @@ func DefaultConfig() WorkspaceConfig {
 
 func (s TaskStatus) CanTransitionTo(next TaskStatus) bool {
 	allowed := map[TaskStatus]map[TaskStatus]bool{
-		StatusPlanned: {
+		StatusDraft: {
+			StatusPlanned:       true,
+			StatusReviewPending: true,
+			StatusBlocked:       true,
+		},
+		StatusReviewPending: {
 			StatusReady:   true,
+			StatusPlanned: true,
 			StatusBlocked: true,
+		},
+		StatusPlanned: {
+			StatusReady:         true,
+			StatusReviewPending: true,
+			StatusBlocked:       true,
 		},
 		StatusReady: {
 			StatusRunning: true,

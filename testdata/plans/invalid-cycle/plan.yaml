@@ -1,0 +1,46 @@
+schema_version: "1.0"
+feature:
+  id: cycle
+  title: Cycle test
+plan:
+  revision: 1
+repositories:
+  - id: repo-a
+    relevant: true
+requirements:
+  - id: R001
+    description: Req
+    tasks:
+      - T001
+      - T002
+acceptance_criteria:
+  - id: AC001
+    implementation_tasks:
+      - T001
+    planned_verification:
+      - test
+  - id: AC002
+    implementation_tasks:
+      - T002
+    planned_verification:
+      - test
+tasks:
+  - id: T001
+    title: A
+    repository: repo-a
+    dependencies:
+      - T002
+    verification:
+      - command: go test ./...
+  - id: T002
+    title: B
+    repository: repo-a
+    dependencies:
+      - T001
+    verification:
+      - command: go test ./...
+verification:
+  strategy: repository-aware
+  by_repository:
+    repo-a:
+      - test

@@ -10,20 +10,24 @@ import (
 )
 
 type AgentHint struct {
-	Skill                string         `json:"skill"`
-	TriggerPhrases       []string       `json:"trigger_phrases"`
-	Reason               string         `json:"reason"`
-	SuggestedPrompt      string         `json:"suggested_prompt"`
-	SuggestedNextCommand string         `json:"suggested_next_command"`
-	WorkspaceRoot        string         `json:"workspace_root"`
-	WorkspaceInitialized bool           `json:"workspace_initialized"`
-	RepositoriesCount    int            `json:"repositories_count"`
-	TotalTasks           int            `json:"total_tasks"`
-	ReadyTasks           []string       `json:"ready_tasks,omitempty"`
-	RunningTasks         []string       `json:"running_tasks,omitempty"`
-	ImplementedTasks     []string       `json:"implemented_tasks,omitempty"`
-	TaskCountByStatus    map[string]int `json:"task_count_by_status,omitempty"`
-	GraphValidationError string         `json:"graph_validation_error,omitempty"`
+	Skill                 string         `json:"skill"`
+	TriggerPhrases        []string       `json:"trigger_phrases"`
+	Reason                string         `json:"reason"`
+	SuggestedPrompt       string         `json:"suggested_prompt"`
+	SuggestedNextCommand  string         `json:"suggested_next_command"`
+	WorkspaceRoot         string         `json:"workspace_root"`
+	WorkspaceInitialized  bool           `json:"workspace_initialized"`
+	RepositoriesCount     int            `json:"repositories_count"`
+	TotalTasks            int            `json:"total_tasks"`
+	ReadyTasks            []string       `json:"ready_tasks,omitempty"`
+	RunningTasks          []string       `json:"running_tasks,omitempty"`
+	ImplementedTasks      []string       `json:"implemented_tasks,omitempty"`
+	TaskCountByStatus     map[string]int `json:"task_count_by_status,omitempty"`
+	GraphValidationError  string         `json:"graph_validation_error,omitempty"`
+	WorkflowStatus        string         `json:"workflow_status,omitempty"`
+	CurrentPlanRevision   int            `json:"current_plan_revision,omitempty"`
+	ApprovedPlanRevision  *int           `json:"approved_plan_revision,omitempty"`
+	ApprovalRequired      bool           `json:"approval_required,omitempty"`
 }
 
 func BuildAgentHint(workspaceRoot string) (AgentHint, error) {
@@ -41,6 +45,15 @@ func BuildAgentHint(workspaceRoot string) (AgentHint, error) {
 	}
 	hint.WorkspaceInitialized = true
 
+	ws, err := LoadWorkflowState(workspaceRoot)
+	if err != nil {
+		return hint, err
+	}
+	hint.WorkflowStatus = string(ws.WorkflowStatus)
+	hint.CurrentPlanRevision = ws.CurrentPlanRevision
+	hint.ApprovedPlanRevision = ws.ApprovedPlanRevision
+	hint.ApprovalRequired = ApprovalRequired(ws)
+
 	repos, err := readRepositoryRegistry(workspaceRoot)
 	if err != nil {
 		return hint, err
@@ -54,7 +67,7 @@ func BuildAgentHint(workspaceRoot string) (AgentHint, error) {
 	hint.TotalTasks = len(tasks)
 	hint.TaskCountByStatus = summarizeTaskStatuses(tasks)
 
-	readyTasks, readyErr := ReadyTasks(tasks)
+	readyTasks, readyErr := ReadyTasks(workspaceRoot, tasks)
 	if readyErr != nil {
 		hint.Reason = "task_graph_invalid"
 		hint.GraphValidationError = readyErr.Error()
@@ -67,15 +80,56 @@ func BuildAgentHint(workspaceRoot string) (AgentHint, error) {
 	hint.ImplementedTasks = append(taskIDsByStatus(tasks, StatusImplemented), taskIDsByStatus(tasks, StatusVerifying)...)
 	sort.Strings(hint.ImplementedTasks)
 
+	if RequiresPlanApproval(ws) {
+		switch ws.WorkflowStatus {
+		case WorkflowReviewPending:
+			hint.Reason = "tasks_awaiting_approval"
+			hint.SuggestedNextCommand = "feature-dev review --json"
+			hint.SuggestedPrompt = "Present .feature/tasks/tasks.json, repo assignments, and DAG to the user. Wait for explicit approval, then run feature-dev approve."
+			return hint, nil
+		case WorkflowPlanGenerated:
+			hint.Reason = "task_plan_invalid"
+			hint.SuggestedNextCommand = "feature-dev task preview --json"
+			hint.SuggestedPrompt = "Fix tasks.json validation issues, then run feature-dev plan submit --from-tasks."
+			return hint, nil
+		case WorkflowReplanning:
+			hint.Reason = "plan_replanning"
+			hint.SuggestedNextCommand = "feature-dev plan submit --from-tasks"
+			hint.SuggestedPrompt = "Revise .feature/tasks/tasks.json based on user feedback, submit a new revision, and request approval."
+			return hint, nil
+		case WorkflowRejected:
+			hint.Reason = "plan_rejected"
+			hint.SuggestedNextCommand = "feature-dev replan"
+			hint.SuggestedPrompt = "The plan was rejected. Enter replanning, revise the plan, submit a new revision, and request approval."
+			return hint, nil
+		case WorkflowApproved:
+			hint.Reason = "plan_approved_ready"
+			hint.SuggestedNextCommand = "feature-dev reconcile && feature-dev execute-loop --json"
+			hint.SuggestedPrompt = "The plan is approved. Continue autonomous execute-loop cycles until all tasks are DONE."
+			return hint, nil
+		default:
+			if ws.WorkflowStatus != WorkflowExecuting && ws.WorkflowStatus != WorkflowCompleted {
+				hint.Reason = "plan_awaiting_approval"
+				hint.SuggestedNextCommand = "feature-dev review --json"
+				hint.SuggestedPrompt = "Complete plan submission and obtain user approval before implementation."
+				return hint, nil
+			}
+		}
+	}
+
 	switch {
 	case hint.RepositoriesCount == 0:
 		hint.Reason = "repositories_not_discovered"
 		hint.SuggestedNextCommand = "feature-dev discover"
-		hint.SuggestedPrompt = "Use feature-dev command, run discover, plan tasks and dependencies, then continue execute-loop orchestration."
+		hint.SuggestedPrompt = "Use feature-dev command, run discover, analyze repositories, write .feature/tasks/tasks.json, then plan submit --from-tasks."
 	case hint.TotalTasks == 0:
 		hint.Reason = "no_tasks_defined"
 		hint.SuggestedNextCommand = "feature-dev task add T001 \"Define first feature slice\""
-		hint.SuggestedPrompt = "Use feature-dev command, infer a task DAG with dependencies and repository ownership, write .feature/tasks/tasks.json, then run reconcile and execute-loop."
+		hint.SuggestedPrompt = "Analyze PLAN.md and repositories, write .feature/tasks/tasks.json with repo assignments and dependencies, then run plan submit --from-tasks."
+	case hint.TotalTasks > 0 && ws.CurrentPlanRevision == 0:
+		hint.Reason = "tasks_need_submit"
+		hint.SuggestedNextCommand = "feature-dev plan submit --from-tasks"
+		hint.SuggestedPrompt = "Submit the tasks.json plan for validation and user review before implementation."
 	case len(hint.ImplementedTasks) > 0 || len(hint.RunningTasks) > 0 || len(hint.ReadyTasks) > 0:
 		hint.Reason = "ready_for_orchestration"
 		hint.SuggestedNextCommand = "feature-dev reconcile && feature-dev execute-loop --json"
@@ -120,6 +174,12 @@ func BuildAgentHintCommand() *cobra.Command {
 			fmt.Printf("workspace initialized: %t\n", hint.WorkspaceInitialized)
 			fmt.Printf("repositories: %d\n", hint.RepositoriesCount)
 			fmt.Printf("tasks: %d\n", hint.TotalTasks)
+			if hint.WorkflowStatus != "" {
+				fmt.Printf("workflow status: %s\n", hint.WorkflowStatus)
+			}
+			if hint.CurrentPlanRevision > 0 {
+				fmt.Printf("plan revision: %d\n", hint.CurrentPlanRevision)
+			}
 			if len(hint.ReadyTasks) > 0 {
 				fmt.Printf("ready: %v\n", hint.ReadyTasks)
 			}

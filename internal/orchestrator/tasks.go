@@ -76,10 +76,16 @@ func ValidateGraph(tasks []Task) ([]Task, error) {
 	return tasks, nil
 }
 
-func ReadyTasks(tasks []Task) ([]Task, error) {
+func ReadyTasks(workspaceRoot string, tasks []Task) ([]Task, error) {
 	if _, err := ValidateGraph(tasks); err != nil {
 		return nil, err
 	}
+
+	ws, err := LoadWorkflowState(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	gated := RequiresPlanApproval(ws)
 
 	byID := map[string]Task{}
 	for _, task := range tasks {
@@ -88,7 +94,11 @@ func ReadyTasks(tasks []Task) ([]Task, error) {
 
 	ready := make([]Task, 0)
 	for _, task := range tasks {
-		if task.Status != StatusPlanned && task.Status != StatusBlocked && task.Status != StatusRework && task.Status != StatusFailed {
+		if gated {
+			if task.Status != StatusReady {
+				continue
+			}
+		} else if task.Status != StatusPlanned && task.Status != StatusBlocked && task.Status != StatusRework && task.Status != StatusFailed {
 			continue
 		}
 		blocked := false
