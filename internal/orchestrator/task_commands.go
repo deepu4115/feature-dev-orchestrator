@@ -17,6 +17,7 @@ func BuildTaskCommand() *cobra.Command {
 	cmd.AddCommand(BuildAddTaskCommand())
 	cmd.AddCommand(BuildListTasksCommand())
 	cmd.AddCommand(BuildReadyTaskListCommand())
+	cmd.AddCommand(BuildTaskPreviewCommand())
 	cmd.AddCommand(BuildStartTaskCommand())
 	cmd.AddCommand(BuildCompleteTaskCommand())
 	cmd.AddCommand(BuildFailTaskCommand())
@@ -104,7 +105,7 @@ func BuildReadyTaskListCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ready, err := ReadyTasks(tasks)
+			ready, err := ReadyTasks(workspaceRoot, tasks)
 			if err != nil {
 				return err
 			}
@@ -143,7 +144,16 @@ func BuildStartTaskCommand() *cobra.Command {
 				return fmt.Errorf("task %s not found", args[0])
 			}
 
-			ready, err := ReadyTasks(tasks)
+			if err := CanExecute(workspaceRoot); err != nil {
+				return err
+			}
+
+			ws, err := LoadWorkflowState(workspaceRoot)
+			if err != nil {
+				return err
+			}
+
+			ready, err := ReadyTasks(workspaceRoot, tasks)
 			if err != nil {
 				return err
 			}
@@ -156,6 +166,15 @@ func BuildStartTaskCommand() *cobra.Command {
 			}
 			if !isReady && tasks[idx].Status != StatusReady {
 				return fmt.Errorf("task %s is not ready", args[0])
+			}
+
+			if RequiresPlanApproval(ws) {
+				if tasks[idx].Status != StatusReady {
+					return fmt.Errorf("task %s is not ready", args[0])
+				}
+				if err := CanStartTaskInWorkspace(workspaceRoot, tasks[idx]); err != nil {
+					return err
+				}
 			}
 
 			if tasks[idx].Status != StatusReady {
@@ -323,4 +342,32 @@ func findTaskIndex(tasks []Task, taskID string) int {
 		}
 	}
 	return -1
+}
+
+func BuildTaskPreviewCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "preview",
+		Short: "Preview the current tasks.json plan for review",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workspaceRoot, err := ResolveWorkspaceRoot()
+			if err != nil {
+				return err
+			}
+			jsonFlag, _ := cmd.Flags().GetBool("json")
+			payload, report, err := PreviewTaskPlan(workspaceRoot)
+			if err != nil {
+				return err
+			}
+			if jsonFlag {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(payload)
+			}
+			ws, _ := LoadWorkflowState(workspaceRoot)
+			fmt.Print(RenderTasksReviewText(workspaceRoot, ws, payload.TaskItems, report))
+			return nil
+		},
+	}
+	cmd.Flags().Bool("json", false, "Emit preview as JSON")
+	return cmd
 }

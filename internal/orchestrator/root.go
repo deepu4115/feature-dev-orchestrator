@@ -23,6 +23,12 @@ func BuildRootCommand() *cobra.Command {
 	root.AddCommand(BuildRepositoriesCommand())
 	root.AddCommand(BuildStatusCommand())
 	root.AddCommand(BuildAgentHintCommand())
+	root.AddCommand(BuildPlanCommand())
+	root.AddCommand(BuildReviewCommand())
+	root.AddCommand(BuildApproveCommand())
+	root.AddCommand(BuildRejectCommand())
+	root.AddCommand(BuildReplanCommand())
+	root.AddCommand(BuildPlanDiffCommand())
 	root.AddCommand(BuildGraphCommand())
 	root.AddCommand(BuildReadyCommand())
 	root.AddCommand(BuildStartTaskCommand())
@@ -160,9 +166,17 @@ func BuildStatusCommand() *cobra.Command {
 				return err
 			}
 			jsonFlag, _ := cmd.Flags().GetBool("json")
-			payload := map[string]string{
-				"workspace":   workspaceRoot,
-				"feature_dir": ResolveFeatureDir(workspaceRoot),
+			ws, err := LoadWorkflowState(workspaceRoot)
+			if err != nil {
+				return err
+			}
+			payload := map[string]any{
+				"workspace":              workspaceRoot,
+				"feature_dir":            ResolveFeatureDir(workspaceRoot),
+				"workflow_status":        ws.WorkflowStatus,
+				"current_plan_revision":  ws.CurrentPlanRevision,
+				"approved_plan_revision": ws.ApprovedPlanRevision,
+				"approval_required":      ApprovalRequired(ws),
 			}
 			if jsonFlag {
 				enc := json.NewEncoder(os.Stdout)
@@ -171,6 +185,13 @@ func BuildStatusCommand() *cobra.Command {
 			}
 			fmt.Printf("workspace: %s\n", payload["workspace"])
 			fmt.Printf("feature dir: %s\n", payload["feature_dir"])
+			fmt.Printf("workflow status: %s\n", ws.WorkflowStatus)
+			if ws.CurrentPlanRevision > 0 {
+				fmt.Printf("plan revision: %d\n", ws.CurrentPlanRevision)
+				if ws.ApprovedPlanRevision != nil {
+					fmt.Printf("approved revision: %d\n", *ws.ApprovedPlanRevision)
+				}
+			}
 			return nil
 		},
 	}
@@ -191,7 +212,7 @@ func BuildReadyCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ready, err := ReadyTasks(tasks)
+			ready, err := ReadyTasks(workspaceRoot, tasks)
 			if err != nil {
 				return err
 			}

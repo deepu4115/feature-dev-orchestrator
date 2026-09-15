@@ -36,30 +36,55 @@ Run:
 
 If doctor reports issues, fix initialization/discovery first.
 
-### 2) Read Plan and Create Task Graph (Agent-Owned)
-- Read the plan file named in the prompt. If the prompt says `PLAN.md`, read `PLAN.md` from the workspace root.
-- Treat the plan as the feature intent and acceptance source; inspect relevant code in assigned repositories to fill in implementation details.
-- Create or update `.feature/tasks/tasks.json`.
-- Ensure each task includes:
-  - id
-  - title
-  - repository
-  - dependencies
-  - description
-  - verify command
-- Use [Task DAG Template](./assets/task-dag-template.json) as the shape reference.
+### 2) Deep Planning and Task Graph (Agent-Owned)
+Do not modify production source code during planning. Allowed paths: `.feature/**`, `PLAN.md`, planning/review artifacts.
 
-Validate graph:
-- `go run ./cmd/feature-dev graph`
+Deep planning phase (required):
+1. Read `PLAN.md` and extract requirements and acceptance criteria.
+2. Run discovery and inspect each relevant repository (structure, modules, APIs, tests).
+3. Build an ownership matrix: requirement → primary repository → proposed task(s), with rationale.
+4. Design small verifiable subtasks with one primary repository each and explicit dependencies only when truly blocking.
+5. Write [`.feature/tasks/tasks.json`](.github/skills/feature-dev-orchestrator/assets/task-dag-template.json) including:
+   - `id`, `title`, `repository`, `dependencies`, `verification`
+   - `repository_rationale`, `ownership_confidence`, `requirement_ids`, `planned_verification`
+6. Validate locally: `go run ./cmd/feature-dev graph`
+7. Submit for review: `go run ./cmd/feature-dev plan submit --from-tasks`
+8. Present for human review:
+   - `go run ./cmd/feature-dev review --json`
+   - `go run ./cmd/feature-dev graph`
+   - Show the user `.feature/tasks/tasks.json` task list, repo assignments, dependencies, and validation warnings.
+9. Stop and wait for explicit user approval (for example: "approve", "go ahead with implementation").
+10. Persist approval: `go run ./cmd/feature-dev approve`
 
-If graph validation fails, repair dependencies and rerun until valid.
+If the user requests changes:
+- `go run ./cmd/feature-dev replan --reason "..."`
+- Revise `.feature/tasks/tasks.json`, resubmit with `plan submit --from-tasks`, and request approval again.
 
-### 3) Reconcile and Execute
+Planning rules:
+1. Analyze `PLAN.md` and relevant repositories deeply before writing tasks.
+2. Assign each subtask to the correct repository with rationale.
+3. Do not modify production code during planning.
+4. Run `feature-dev plan submit --from-tasks` then `feature-dev review`.
+5. Present `.feature/tasks/tasks.json` to the user for review.
+6. Wait for explicit approval.
+7. Do not start implementation until `feature-dev status --json` reports `workflow_status: APPROVED`.
+
+### 3) Reconcile and Execute (After Approval Only)
 Run:
 - `go run ./cmd/feature-dev reconcile`
 - `go run ./cmd/feature-dev execute-loop --json`
 
+Execution rules:
+1. Confirm workflow status is `APPROVED`.
+2. Run `feature-dev ready`.
+3. Select a `READY` task.
+4. Load only task-specific context.
+5. Run `feature-dev start <task>` or continue via execute-loop.
+6. Implement the task in its assigned repository.
+7. Run verification and continue until all tasks are `DONE`.
+
 Interpret stop reasons:
+- `plan_not_approved`: run review flow and obtain approval before coding.
 - `awaiting_code_changes`: implement active task in assigned repository, run verify/tests, rerun execute-loop.
 - `verify_failure_budget_reached`: inspect artifacts/output, fix root cause, rerun reconcile, rerun execute-loop.
 - `no_executable_task`: inspect dependencies, missing repo assignment, or unmet prerequisites; repair tasks; rerun reconcile and execute-loop.
@@ -89,23 +114,21 @@ For every cycle, report:
 Use this prompt when starting feature work:
 
 ```text
-Use feature-dev command to implement PLAN.md with minimal manual intervention.
+Use feature-dev-orchestrator to implement PLAN.md.
 
-Read PLAN.md first and inspect every relevant repository before planning. Infer
-a repository-aware task DAG with explicit dependencies, assign each task to the
-correct repository, and write .feature/tasks/tasks.json. Include observable
-acceptance criteria and a repository-specific verification command for every
-task. Validate the graph before coding.
+Do deep planning first: inspect relevant repositories, assign each subtask to the
+correct repo with rationale, and write .feature/tasks/tasks.json with a valid DAG.
+Do not modify production code during planning.
 
-Then run reconcile and execute-loop --json. When the loop says
-awaiting_code_changes, implement only the assigned task in its assigned
-repository, run its verification command, and resume the loop. When
-verification fails, inspect the output and artifacts, fix the root cause, and
-resume. Continue until every task is DONE.
+Then run:
+  feature-dev plan submit --from-tasks
+  feature-dev review --json
+  feature-dev graph
 
-Before finishing, run a final cross-repository review against PLAN.md, verify
-integration points and tests, and report the completed tasks, repositories,
-verification results, and any remaining risks. Stop only for a genuine blocker.
+Show me the tasks.json task list, repo assignments, dependencies, and any validation
+warnings. Wait for my explicit approval before implementation.
+
+After I approve, run feature-dev approve and then execute-loop --json.
 ```
 
 Short form:

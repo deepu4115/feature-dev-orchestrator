@@ -4,23 +4,33 @@
       "id": "T001",
       "title": "Define baseline behavior",
       "repository": "repo-a",
+      "repository_rationale": "repo-a owns the shared contract consumed by downstream services",
+      "ownership_confidence": "HIGH",
+      "requirement_ids": ["R001"],
       "dependencies": [],
-      "description": "Implement baseline behavior with explicit acceptance criteria.",
-      "verify": {
-        "command": "go test ./...",
-        "working_directory": "."
-      }
+      "goal": "Implement baseline behavior with explicit acceptance criteria.",
+      "planned_verification": ["unit tests", "compile"],
+      "verification": [
+        {
+          "command": "go test ./..."
+        }
+      ]
     },
     {
       "id": "T002",
       "title": "Integrate downstream behavior",
       "repository": "repo-b",
+      "repository_rationale": "repo-b implements the consumer-facing API",
+      "ownership_confidence": "HIGH",
+      "requirement_ids": ["R002"],
       "dependencies": ["T001"],
-      "description": "Add integration behavior that depends on T001.",
-      "verify": {
-        "command": "npm test",
-        "working_directory": "."
-      }
+      "goal": "Add integration behavior that depends on T001.",
+      "planned_verification": ["integration tests"],
+      "verification": [
+        {
+          "command": "npm test"
+        }
+      ]
     }
   ]
 }

@@ -1,0 +1,31 @@
+schema_version: "1.0"
+feature:
+  id: bad-repo
+  title: Missing repo test
+plan:
+  revision: 1
+repositories:
+  - id: repo-a
+    relevant: true
+requirements:
+  - id: R001
+    description: Req
+    tasks:
+      - T001
+acceptance_criteria:
+  - id: AC001
+    implementation_tasks:
+      - T001
+    planned_verification:
+      - test
+tasks:
+  - id: T001
+    title: Bad repo task
+    repository: unknown-repo
+    verification:
+      - command: go test ./...
+verification:
+  strategy: repository-aware
+  by_repository:
+    unknown-repo:
+      - test

@@ -25,9 +25,12 @@ In practical terms, the tool helps you:
 - initialize a feature workspace
 - discover Git repositories in the workspace
 - keep repo information in a structured registry
-- understand the current workspace state
-- prepare for task planning and readiness checks
-- keep future orchestration logic deterministic and reusable
+- decompose features into a repo-aware task DAG in `.feature/tasks/tasks.json`
+- validate plan quality (repo assignments, dependencies, verification) before coding
+- require explicit human approval before implementation begins
+- understand the current workspace and workflow state
+- execute tasks deterministically with repository-scoped verification
+- resume safely across IDE sessions and agent restarts
 
 ## Why this tool exists
 
@@ -46,6 +49,38 @@ Feature Dev Orchestrator fixes these problems by separating the responsibilities
 
 This makes the development workflow more reliable and easier to resume.
 
+## Deep planning and human review
+
+The most common failure mode in multi-repo AI-assisted development is not bad code — it is **bad planning**: wrong repo assignments, missing dependencies, and coding that starts before anyone reviews the breakdown.
+
+This tool addresses that with a **tasks.json-first planning workflow**:
+
+1. The agent reads `PLAN.md` and inspects relevant repositories (no production code changes during planning).
+2. The agent writes `.feature/tasks/tasks.json` with repo assignments, dependencies, verification commands, and optional planning metadata.
+3. `feature-dev plan submit --from-tasks` validates the plan and creates an immutable revision snapshot.
+4. `feature-dev review` presents the task list, repo assignments, dependency graph, and validation warnings for human review.
+5. `feature-dev approve` unlocks execution; `start` and `execute-loop` remain blocked until then.
+
+Planning metadata on each task (optional but recommended):
+
+| Field | Purpose |
+|-------|---------|
+| `repository_rationale` | Why this repo owns the task |
+| `ownership_confidence` | `HIGH`, `MEDIUM`, or `LOW` |
+| `requirement_ids` | Trace tasks back to requirements in `PLAN.md` |
+| `planned_verification` | Human-readable verification intent |
+
+CLI validation catches structural plan problems before `REVIEW_PENDING`:
+
+- unknown or missing repository assignments
+- broken DAG (cycles, missing dependencies)
+- missing title or verification command
+- duplicate or empty task IDs
+- **error**: LOW ownership confidence on a task with cross-repo downstream dependents
+- **warning**: cross-repo dependencies, untraced requirements, all tasks blocked
+
+Each submitted revision snapshots tasks to `.feature/plans/revision-NNN/tasks.json` for audit and diff.
+
 ## How this is better than normal prompting in multi-repo workspaces
 
 In a single repository, normal prompting can often be enough. In multi-repo workspaces, the same approach becomes fragile because context, execution location, and task ordering can drift between sessions.
@@ -60,7 +95,7 @@ Feature Dev Orchestrator improves this by adding deterministic coordination arou
 - lower cognitive load: less repeated prompting about repo ownership, status, and next steps
 - consistent team workflow: shared commands create repeatable behavior across contributors
 
-Practical takeaway: normal prompting is flexible but easy to derail in multi-repo feature work. This tool keeps prompting focused on reasoning and coding, while orchestration mechanics remain stable and resumable.
+Practical takeaway: normal prompting is flexible but easy to derail in multi-repo feature work. This tool keeps prompting focused on reasoning and coding, while orchestration mechanics — including **plan validation and approval gates** — remain stable and resumable.
 
 ## How it works at a high level
 
@@ -70,10 +105,12 @@ The tool is intentionally simple and deterministic.
 2. It creates a `.feature` folder for orchestration metadata.
 3. It discovers Git repositories under the workspace.
 4. It stores repository information in a structured registry.
-5. Future orchestration commands use that registry to determine the next task or repo context.
-6. The result is a more controlled workflow for feature execution and resume.
+5. The agent writes and submits a task plan (`plan submit --from-tasks`).
+6. The CLI validates the plan and waits for human approval.
+7. After approval, orchestration commands select the next task, enforce repo boundaries, and track verification.
+8. The result is a controlled workflow for planning, review, execution, and resume.
 
-The tool does not replace the coding agent. Instead, it helps the agent work inside a structured feature workflow.
+The tool does not replace the coding agent. Instead, it helps the agent work inside a structured feature workflow with enforced checkpoints.
 
 ## Project architecture
 
@@ -81,22 +118,23 @@ The following structure reflects the design:
 
 ```text
 feature-dev-orchestrator/
-├── cmd/
-│   └── feature-dev/
-│       └── main.go
-├── internal/
-│   └── orchestrator/
-│       ├── root.go
-│       ├── types.go
-│       ├── workspace.go
-│       ├── filesystem.go
-│       ├── yaml.go
-│       └── workspace_test.go
-├── .feature/
-├── README.md
-├── go.mod
-├── .gitignore
-└── ...
+├── cmd/feature-dev/main.go
+├── internal/orchestrator/
+│   ├── workspace.go          # init, discover, repositories registry
+│   ├── tasks.go              # task graph persistence
+│   ├── plan.go               # plan revisions, BuildPlanFromTasks
+│   ├── task_plan_validate.go # repo/DAG/ownership validation
+│   ├── plan_validate.go      # plan document validation
+│   ├── plan_review.go        # tasks.json-first review output
+│   ├── plan_commands.go      # submit, review, approve, replan
+│   ├── approval.go           # approval gate for execution
+│   ├── workflow.go           # workflow state machine
+│   ├── execute_next.go       # execute-next / execute-loop
+│   └── agent_hint.go         # agent routing hints
+├── .github/skills/feature-dev-orchestrator/
+│   ├── SKILL.md              # agent deep-planning procedure
+│   └── assets/task-dag-template.json
+└── testdata/plans/           # plan validation fixtures
 ```
 
 ## Key concepts
@@ -110,7 +148,10 @@ A repository is a Git project inside the workspace. Each repo is treated as its 
 ### 3. Feature state
 The tool keeps orchestration metadata in `.feature`, which is reserved for workflow and state artifacts.
 
-### 4. Deterministic behavior
+### 4. Workflow state
+Plan revisions progress through workflow states such as `REVIEW_PENDING`, `APPROVED`, and `REPLANNING`. State is persisted under `.feature/state/workflow.json` and gates execution until approval.
+
+### 5. Deterministic behavior
 The tool is designed to behave consistently and predictably, instead of depending on hidden agent state or ad hoc assumptions.
 
 ## `.feature` Lifecycle Example
@@ -126,25 +167,32 @@ my-feature-workspace/
 │   ├── config.yaml
 │   ├── repositories.json
 │   ├── workflow.yaml
-│   ├── tasks/
-│   │   └── tasks.json
 │   ├── state/
+│   │   ├── workflow.json
 │   │   └── task-summaries.jsonl
-│   ├── context/
-│   │   └──                          # reserved for generated context
+│   ├── tasks/
+│   │   └── tasks.json                 # live task graph (primary review artifact)
+│   ├── plans/
+│   │   ├── draft/
+│   │   │   └── plan.yaml              # optional advanced draft path
+│   │   └── revision-001/
+│   │       ├── plan.yaml
+│   │       ├── tasks.json             # immutable snapshot at submit time
+│   │       ├── review.md
+│   │       ├── summary.md
+│   │       └── dag.json
+│   ├── context/                       # reserved for generated context
 │   ├── artifacts/
 │   │   ├── verify-t001-<timestamp>.json
 │   │   └── verify-t002-<timestamp>.json
-│   ├── reviews/
-│   │   └──                          # reserved for review artifacts
-│   └── logs/
-│       └──                          # reserved for workflow logs
+│   ├── reviews/                       # reserved for review artifacts
+│   └── logs/                          # reserved for workflow logs
 ├── checkout-web/
 │   └── .git/
 ├── payments-api/
 │   └── .git/
 └── shared-contracts/
-		└── .git/
+    └── .git/
 ```
 
 `init` creates the directories and default `config.yaml`, empty
@@ -189,39 +237,47 @@ repository_discovery:
 ]
 ```
 
-`.feature/tasks/tasks.json` is the persisted task graph. The agent creates or
-updates it from `PLAN.md`; the CLI owns status transitions:
+`.feature/tasks/tasks.json` is the persisted task graph and the **primary artifact for human review**. The agent creates or updates it from `PLAN.md`; the CLI owns status transitions after approval:
 
 ```json
 [
-	{
-		"id": "T001",
-		"title": "Add authorization contract",
-		"repository": "shared-contracts",
-		"status": "DONE",
-		"dependencies": [],
-		"acceptance_criteria": [
-			"The authorization request and response types are available to consumers."
-		],
-		"verification": [
-			{ "command": "npm test" }
-		]
-	},
-	{
-		"id": "T002",
-		"title": "Implement API authorization",
-		"repository": "payments-api",
-		"status": "DONE",
-		"dependencies": ["T001"],
-		"acceptance_criteria": [
-			"The API validates authorization requests and returns the documented response."
-		],
-		"verification": [
-			{ "command": "go test ./..." }
-		]
-	}
+  {
+    "id": "T001",
+    "title": "Add authorization contract",
+    "repository": "shared-contracts",
+    "status": "REVIEW_PENDING",
+    "dependencies": [],
+    "repository_rationale": "Shared DTOs live in the contracts repo",
+    "ownership_confidence": "HIGH",
+    "requirement_ids": ["R001"],
+    "planned_verification": ["Contract tests pass in shared-contracts"],
+    "acceptance_criteria": [
+      "The authorization request and response types are available to consumers."
+    ],
+    "verification": [
+      { "command": "npm test" }
+    ]
+  },
+  {
+    "id": "T002",
+    "title": "Implement API authorization",
+    "repository": "payments-api",
+    "status": "REVIEW_PENDING",
+    "dependencies": ["T001"],
+    "repository_rationale": "payments-api owns the authorization endpoint",
+    "ownership_confidence": "HIGH",
+    "requirement_ids": ["R001"],
+    "acceptance_criteria": [
+      "The API validates authorization requests and returns the documented response."
+    ],
+    "verification": [
+      { "command": "go test ./..." }
+    ]
+  }
 ]
 ```
+
+During planning, keep task status at `REVIEW_PENDING` or `PLANNED` — never `RUNNING`. After approval, the orchestrator transitions tasks through `READY` → `RUNNING` → `IMPLEMENTED` → `VERIFYING` → `DONE`.
 
 Each line in `.feature/state/task-summaries.jsonl` records a lifecycle event:
 
@@ -251,21 +307,27 @@ execution timestamp:
 
 ```mermaid
 flowchart TD
-		A[PLAN.md] --> B[feature-dev init]
-		B --> C[.feature scaffold]
-		C --> D[feature-dev discover]
-		D --> E[repositories.json]
-		E --> F[Agent creates tasks.json from PLAN.md]
-		F --> G[feature-dev graph]
-		G --> H[feature-dev reconcile]
-		H --> I[feature-dev execute-loop --json]
-		I --> J{Stop reason}
-		J -->|awaiting_code_changes| K[Agent edits assigned repository]
-		K --> L[Run repository verification]
-		L --> I
-		J -->|verification failure| M[Inspect artifact and repair]
-		M --> I
-		J -->|all tasks DONE| N[Final cross-repository review]
+    A[PLAN.md] --> B[feature-dev init]
+    B --> C[.feature scaffold]
+    C --> D[feature-dev discover]
+    D --> E[repositories.json]
+    E --> F[Agent deep-plans into tasks.json]
+    F --> G[feature-dev plan submit --from-tasks]
+    G --> H{CLI validation}
+    H -->|fail| F
+    H -->|pass| I[feature-dev review]
+    I --> J[Human approval]
+    J -->|changes| K[feature-dev replan]
+    K --> F
+    J -->|approve| L[feature-dev approve]
+    L --> M[feature-dev reconcile]
+    M --> N[feature-dev execute-loop --json]
+    N --> O{Stop reason}
+    O -->|awaiting_code_changes| P[Agent edits assigned repository]
+    P --> Q[Run repository verification]
+    Q --> N
+    O -->|plan_not_approved| I
+    O -->|all tasks DONE| R[Final cross-repository review]
 ```
 
 ### Typical command sequence
@@ -275,8 +337,12 @@ feature-dev init
 feature-dev discover
 feature-dev doctor
 feature-dev agent-hint --json
-# Agent reads PLAN.md and creates .feature/tasks/tasks.json.
+# Agent analyzes PLAN.md + repos, writes .feature/tasks/tasks.json
+feature-dev plan submit --from-tasks
+feature-dev review --json
 feature-dev graph
+# user reviews tasks.json and approves
+feature-dev approve
 feature-dev reconcile
 feature-dev execute-loop --json
 # Agent implements the returned task in its assigned repository.
@@ -409,24 +475,54 @@ feature-dev doctor
 
 This validates that the workspace is properly configured.
 
-### Step 6: Create or import tasks
+### Step 6: Deep plan and write tasks.json
 
-Make sure tasks exist in `.feature/tasks/tasks.json`.
+After reading `PLAN.md` and inspecting relevant repositories, write the task graph to `.feature/tasks/tasks.json`. Use the template at `.github/skills/feature-dev-orchestrator/assets/task-dag-template.json` as a starting point.
 
-If needed, add tasks manually:
+Each task needs at minimum:
+
+- `id`, `title`, `repository`, `dependencies`, `verification`
+- a repository name that matches `.feature/repositories.json`
+
+Recommended planning fields:
+
+- `repository_rationale`, `ownership_confidence`, `requirement_ids`, `planned_verification`
+
+You can also seed tasks with the CLI, then edit the file:
 
 ```bash
 feature-dev task add T001 "Implement feature slice"
 feature-dev task add T002 "Add tests"
 ```
 
-The `task add` command creates workspace tasks. For repository-scoped work,
-edit `.feature/tasks/tasks.json` directly after adding the tasks so you can
-provide the repository assignment, dependencies, description, and verification
-command. The repository name must match an entry in
-`.feature/repositories.json`.
+### Step 7: Submit, review, and approve
 
-### Step 7: Validate before execution
+Submit the plan for CLI validation and human review:
+
+```bash
+feature-dev graph
+feature-dev plan submit --from-tasks
+feature-dev review
+feature-dev review --json   # machine-readable output for agents
+feature-dev task preview --json   # preview tasks without a submitted revision
+```
+
+Review output leads with `.feature/tasks/tasks.json`: task list, repo assignments, dependency graph, and validation warnings. Approve explicitly when ready:
+
+```bash
+feature-dev approve
+```
+
+If changes are needed:
+
+```bash
+feature-dev replan --reason "adjust repo assignments"
+# revise tasks.json, then resubmit
+feature-dev plan submit --from-tasks
+feature-dev review
+```
+
+### Step 8: Validate before execution
 
 Run these checks before starting work:
 
@@ -434,15 +530,17 @@ Run these checks before starting work:
 feature-dev reconcile
 feature-dev ready
 feature-dev graph
+feature-dev status --json
 ```
 
 What each command does:
 
 - `reconcile`: repairs stale or interrupted task state
-- `ready`: shows tasks eligible for execution
+- `ready`: shows tasks eligible for execution (requires approval when a plan revision exists)
 - `graph`: validates dependency relationships
+- `status --json`: shows workflow status including `APPROVED` / `REVIEW_PENDING`
 
-### Step 8: Execute work (recommended autonomous mode)
+### Step 9: Execute work (recommended autonomous mode)
 
 For a single safe autonomous step:
 
@@ -458,16 +556,17 @@ feature-dev execute-loop --json
 
 Use `execute-loop` as default and rerun it after each coding pass.
 
-### Step 9: Handle stop reasons
+### Step 10: Handle stop reasons
 
 When `execute-loop` stops, use this mapping:
 
+- `plan_not_approved`: run review flow and obtain approval before coding
 - `awaiting_code_changes`: implement code changes, then rerun `feature-dev execute-loop --json`
 - `verify_failure_budget_reached`: inspect verify output/artifacts, fix issues, then rerun loop
 - `no_executable_task`: add/fix tasks or dependencies, run `reconcile`, rerun loop
 - `max_steps_reached`: rerun loop or increase `--max-steps`
 
-### Step 10: Optional manual mode
+### Step 11: Optional manual mode
 
 Use manual mode when you need explicit control over each transition:
 
@@ -488,7 +587,7 @@ feature-dev reconcile
 
 ## Example flow
 
-Here is a typical autonomous flow:
+Here is a typical end-to-end flow with deep planning and approval:
 
 ```bash
 cd my-feature-workspace
@@ -497,13 +596,20 @@ feature-dev discover
 feature-dev repositories
 feature-dev status
 feature-dev doctor
+feature-dev agent-hint --json
+
+# Agent reads PLAN.md, inspects repos, writes .feature/tasks/tasks.json
+feature-dev graph
+feature-dev plan submit --from-tasks
+feature-dev review --json
+
+# Human approves repo assignments and task breakdown
+feature-dev approve
+
 feature-dev reconcile
 feature-dev ready
-feature-dev graph
 feature-dev execute-loop --json
 ```
-
-This is the core orchestration loop used for dependency-aware execution and resume across sessions.
 
 Rerun `feature-dev execute-loop --json` after each code-change pass until all planned tasks are complete.
 
@@ -519,6 +625,26 @@ Open the same workspace folder in VS Code with Copilot or in Cursor, then give
 the agent a request like this:
 
 ```text
+Use feature-dev-orchestrator to implement PLAN.md.
+
+Do deep planning first: inspect relevant repositories, assign each subtask to the
+correct repo with rationale, and write .feature/tasks/tasks.json with a valid DAG.
+Do not modify production code during planning.
+
+Then run:
+  feature-dev plan submit --from-tasks
+  feature-dev review --json
+  feature-dev graph
+
+Show me the tasks.json task list, repo assignments, dependencies, and any validation
+warnings. Wait for my explicit approval before implementation.
+
+After I approve, run feature-dev approve and then execute-loop --json.
+```
+
+For post-approval execution, use this operating procedure:
+
+```text
 Use the feature-dev CLI as the orchestration layer for this feature.
 Run `feature-dev doctor`, then `feature-dev reconcile` and
 `feature-dev execute-loop --json`.
@@ -531,16 +657,7 @@ underlying issue, and rerun the loop. Continue until all tasks are DONE or
 report the exact stop reason and task that needs input.
 ```
 
-To implement a written plan, name it directly in the prompt:
-
-```text
-Use feature-dev command to Implement PLAN.md.
-Read PLAN.md first, infer the repository-aware task graph and dependencies,
-write .feature/tasks/tasks.json, validate it, and continue execute-loop cycles
-until all tasks are DONE. Only stop for a genuine blocker.
-```
-
-A normal agent pass looks like this:
+A normal agent pass after approval looks like this:
 
 1. Run `feature-dev execute-loop --json` from the workspace root.
 2. Read the JSON `status`, `task`, and `repository` fields.
@@ -603,6 +720,14 @@ feature-dev discover
 feature-dev repositories
 feature-dev status
 feature-dev agent-hint
+feature-dev plan submit --from-tasks
+feature-dev review
+feature-dev task preview
+feature-dev task add T001 "Task title"
+feature-dev plan-diff
+feature-dev approve
+feature-dev reject
+feature-dev replan
 feature-dev graph
 feature-dev ready
 feature-dev start T001
@@ -635,13 +760,67 @@ Shows the discovered repository registry.
 Shows basic workspace state information.
 
 ### `feature-dev agent-hint`
-Emits a structured routing hint for coding agents, including suggested next command, prompt text, trigger phrases, and orchestration readiness signals.
+Emits a structured routing hint for coding agents, including suggested next command, prompt text, trigger phrases, orchestration readiness signals, and workflow approval state.
 
 Use JSON mode for agent parsing:
 
 ```bash
 feature-dev agent-hint --json
 ```
+
+When a plan revision exists, the hint routes to review/approve before execution. Common planning-phase reasons:
+
+| Reason | Meaning | Suggested next step |
+|--------|---------|---------------------|
+| `tasks_need_submit` | tasks.json exists but no revision submitted | `plan submit --from-tasks` |
+| `task_plan_invalid` | validation failed on last submit | fix tasks.json and resubmit |
+| `tasks_awaiting_approval` | plan in `REVIEW_PENDING` | present tasks.json and wait |
+| `plan_approved_ready` | approved; execution unlocked | `reconcile && execute-loop --json` |
+
+Legacy workspaces without a plan revision keep the previous execute-loop behavior (no approval gate).
+
+### `feature-dev plan submit`
+Submits an immutable plan revision. Primary path:
+
+```bash
+feature-dev plan submit --from-tasks
+```
+
+Also accepts a draft YAML file (`--from .feature/plans/draft/plan.yaml`) or the default draft location. Validates repo assignments, DAG, and verification before entering `REVIEW_PENDING`. On success, snapshots tasks to `.feature/plans/revision-NNN/tasks.json`.
+
+### `feature-dev review`
+Loads the current plan revision and presents a **tasks.json-first** review: task list, repo assignments, dependency graph, and validation warnings. Use `--json` for agent automation.
+
+Example human output:
+
+```text
+Task Plan Review (revision 1)
+Status: REVIEW_PENDING
+
+Review file: .feature/tasks/tasks.json
+Snapshot:    .feature/plans/revision-001/tasks.json
+
+Tasks:
+  T001 [shared-contracts] Add authorization contract
+  T002 [payments-api] Implement API authorization (depends: T001)
+
+USER APPROVAL REQUIRED
+```
+
+### `feature-dev task preview`
+Preview the current `.feature/tasks/tasks.json` plan with validation results and graph output without requiring a submitted revision.
+
+### `feature-dev approve`
+Approves the current plan revision and unlocks dependency-ready tasks to `READY`. Required before `start` or `execute-loop` when a plan revision exists.
+
+### `feature-dev reject`
+Rejects the current plan revision with a persisted reason. Implementation remains locked.
+
+### `feature-dev replan`
+Enters replanning mode so the agent can revise the draft and submit a new revision.
+
+### `feature-dev plan-diff`
+Shows structural differences between plan revisions.
 
 ### `feature-dev ready`
 Checks if any tasks are ready for execution.
@@ -721,11 +900,15 @@ When to execute which:
 
 ## Current status of the project
 
-This repository includes the core orchestration MVP and early hardening. It includes:
+This repository includes the core orchestration MVP and planning hardening. It includes:
 
-- workspace bootstrap
-- repository discovery
-- repository registry persistence
+- workspace bootstrap and repository discovery
+- **deep planning workflow** with tasks.json as the primary review artifact
+- **CLI task plan validation** (repo assignments, DAG, verification, ownership confidence)
+- human review and approval gate before implementation
+- immutable plan revisions and tasks snapshots under `.feature/plans/revision-NNN/`
+- tasks.json-first review output (human and JSON)
+- plan validation, review artifacts, and plan diff
 - task state machine and dependency readiness
 - repository-aware context and verification
 - context budgeting (`brief`/`full` + hard character/file caps)
@@ -733,7 +916,10 @@ This repository includes the core orchestration MVP and early hardening. It incl
 - lifecycle commands (`start`, `complete`, `fail`)
 - reconciliation for stale/incomplete sessions
 - autonomous bounded execution commands (`execute-next`, `execute-loop`)
-- tests for workspace, task transitions, DAG behavior, and reconciliation
+- agent routing hints for planning and execution phases
+- tests for workspace, task transitions, DAG behavior, approval gate, task plan validation, and reconciliation
+
+Workspaces without a plan revision keep legacy behavior (no approval gate). Once a plan revision is submitted, implementation is locked until `feature-dev approve`.
 
 The next implementation stages are planned to include:
 
@@ -778,6 +964,18 @@ before using workspace-specific orchestration commands.
 ### Mistake 3: assuming the workspace itself is a Git repo
 The tool is designed for workspaces containing one or more Git repositories, not only a single top-level repo.
 
+### Mistake 4: skipping plan submit and approval
+Do not run `execute-loop` immediately after writing `tasks.json`. Submit, review, and approve first:
+
+```bash
+feature-dev plan submit --from-tasks
+feature-dev review
+feature-dev approve
+```
+
+### Mistake 5: editing task status manually during normal flow
+The CLI owns status transitions. Use lifecycle commands (`start`, `complete`, `fail`) or `execute-loop`, not manual JSON edits.
+
 ## Troubleshooting
 
 ### The command says the workspace is not initialized
@@ -789,6 +987,28 @@ feature-dev init
 
 ### No repositories are listed
 Make sure your repositories are actual folders containing a `.git` directory.
+
+### Plan submit fails validation
+Inspect validation errors and warnings:
+
+```bash
+feature-dev review --json
+feature-dev task preview --json
+```
+
+Fix `.feature/tasks/tasks.json` (repo names, dependencies, verification commands), then resubmit:
+
+```bash
+feature-dev plan submit --from-tasks
+```
+
+### The tool says plan not approved
+Run the review and approval flow:
+
+```bash
+feature-dev review
+feature-dev approve
+```
 
 ### The tool is not recognized
 Build it or install it globally:
@@ -814,9 +1034,7 @@ The planned roadmap now focuses on hardening and scale:
 
 ## Summary
 
-Feature Dev Orchestrator is a simple but important foundation for workflow-driven software development. It helps you create a structured environment for AI-assisted feature work, especially when multiple repositories and long-running tasks are involved.
-
-The current project is intentionally modular and can expand into a fuller orchestration engine without becoming IDE-specific or overly complex.
+Feature Dev Orchestrator is a workspace-native CLI for multi-repo feature work with AI agents. It separates **planning** (repo-aware task decomposition in `tasks.json`, CLI validation, human review) from **execution** (dependency-aware orchestration, repository-scoped verification, resumable state). Once a plan revision is submitted, implementation stays locked until explicit approval — so agents reason and code, while the tool enforces structure and checkpoints.
 
 ## Quick start
 
@@ -824,9 +1042,13 @@ The current project is intentionally modular and can expand into a fuller orches
 go build ./cmd/feature-dev
 ./feature-dev init
 ./feature-dev discover
-./feature-dev repositories
-./feature-dev status
 ./feature-dev doctor
+./feature-dev agent-hint --json
+
+# After writing .feature/tasks/tasks.json from PLAN.md:
+./feature-dev plan submit --from-tasks
+./feature-dev review
+./feature-dev approve
 ./feature-dev execute-loop --json
 ```
 
