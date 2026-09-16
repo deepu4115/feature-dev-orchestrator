@@ -135,6 +135,7 @@ func ExecuteNext(workspaceRoot string, opts ExecuteNextOptions) (ExecuteNextResu
 		if err := SaveTasks(workspaceRoot, tasks); err != nil {
 			return ExecuteNextResult{}, err
 		}
+		_ = SyncWorkflowFromTasks(workspaceRoot)
 		result.StatusAfter = tasks[idx].Status
 		result.Message = "verification passed and task marked DONE"
 		return result, nil
@@ -171,6 +172,7 @@ func ExecuteNext(workspaceRoot string, opts ExecuteNextOptions) (ExecuteNextResu
 		if err := SaveTasks(workspaceRoot, tasks); err != nil {
 			return ExecuteNextResult{}, err
 		}
+		_ = SyncWorkflowFromTasks(workspaceRoot)
 
 		ctx, err := BuildTaskContext(workspaceRoot, tasks[selectedIdx], opts.ContextLevel, opts.ContextBudget)
 		if err != nil {
@@ -324,6 +326,15 @@ func ExecuteLoop(workspaceRoot string, opts ExecuteLoopOptions) (ExecuteLoopResu
 
 		switch step.Action {
 		case "noop":
+			tasks, _ := LoadTasks(workspaceRoot)
+			if allTasksInStatus(tasks, StatusDone) {
+				if fin, finErr := MaybeAutoCompleteFeature(workspaceRoot, opts.Timeout); finErr == nil && fin.Completed {
+					loop.StoppedReason = "feature_completed"
+					return loop, nil
+				}
+				loop.StoppedReason = "awaiting_final_verification"
+				return loop, nil
+			}
 			loop.StoppedReason = "no_executable_task"
 			return loop, nil
 		case "plan_not_approved":

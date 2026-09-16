@@ -91,17 +91,7 @@ func TestReviewJSONIncludesTasksFileAndGraph(t *testing.T) {
 
 func TestE2E_TasksJSONReviewBeforeApprove(t *testing.T) {
 	workspaceRoot := setupTestWorkspace(t)
-	tasks := []Task{{
-		ID: "T001", Title: "Add health endpoint", Repository: "repo-a", RequirementIDs: []string{"R001"},
-		OwnershipConfidence: "HIGH", RepositoryRationale: "repo-a owns API layer", Status: StatusReviewPending,
-		Verification: []VerificationStep{{Command: "go test ./..."}},
-	}}
-	if err := SaveTasks(workspaceRoot, tasks); err != nil {
-		t.Fatalf("SaveTasks: %v", err)
-	}
-	if _, err := SubmitPlan(workspaceRoot, SubmitPlanOptions{FromTasks: true}); err != nil {
-		t.Fatalf("SubmitPlan: %v", err)
-	}
+	submitFromTasksWithBundle(t, workspaceRoot)
 	payload, _, _, err := ReviewPlan(workspaceRoot)
 	if err != nil {
 		t.Fatalf("ReviewPlan: %v", err)
@@ -129,7 +119,7 @@ func TestTaskPreviewCommandPayload(t *testing.T) {
 	if err := SaveTasks(workspaceRoot, tasks); err != nil {
 		t.Fatalf("SaveTasks: %v", err)
 	}
-	payload, _, err := PreviewTaskPlan(workspaceRoot)
+	payload, _, _, err := PreviewTaskPlan(workspaceRoot)
 	if err != nil {
 		t.Fatalf("PreviewTaskPlan: %v", err)
 	}

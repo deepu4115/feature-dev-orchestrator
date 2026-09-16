@@ -354,7 +354,7 @@ func BuildTaskPreviewCommand() *cobra.Command {
 				return err
 			}
 			jsonFlag, _ := cmd.Flags().GetBool("json")
-			payload, report, err := PreviewTaskPlan(workspaceRoot)
+			payload, doc, report, err := PreviewTaskPlan(workspaceRoot)
 			if err != nil {
 				return err
 			}
@@ -364,7 +364,7 @@ func BuildTaskPreviewCommand() *cobra.Command {
 				return enc.Encode(payload)
 			}
 			ws, _ := LoadWorkflowState(workspaceRoot)
-			fmt.Print(RenderTasksReviewText(workspaceRoot, ws, payload.TaskItems, report))
+			fmt.Print(RenderTasksReviewText(workspaceRoot, ws, payload.TaskItems, doc, report))
 			return nil
 		},
 	}

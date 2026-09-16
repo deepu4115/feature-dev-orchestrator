@@ -55,6 +55,70 @@ func writePlanDraft(t *testing.T, workspaceRoot string, doc PlanDocument) {
 	}
 }
 
+func validPlanningBundle() PlanningDraftBundle {
+	return PlanningDraftBundle{
+		Requirements: DraftRequirementsFile{Requirements: []DraftRequirement{{ID: "R001", Description: "Add health endpoint"}}},
+		Assumptions:  DraftAssumptionsFile{Assumptions: []DraftAssumption{{ID: "A001", Statement: "repo-a owns API", Confidence: "HIGH", Impact: "MEDIUM"}}},
+		Risks:        DraftRisksFile{Risks: []DraftRisk{{ID: "RK001", Level: "MEDIUM", Description: "API change", Mitigation: []string{"add tests"}}}},
+		Impact:       DraftImpactFile{Impact: []DraftImpactEntry{{Repository: "repo-a", Areas: []string{"api/handlers"}}}},
+		RepoAnalysis: DraftRepoAnalysisFile{Repositories: []DraftRepoAnalysisEntry{{Repository: "repo-a", Evidence: []string{"repo-a/main.go"}}}},
+	}
+}
+
+func writeValidPlanningBundle(t *testing.T, workspaceRoot string) {
+	t.Helper()
+	if err := WritePlanningBundleFixture(workspaceRoot, validPlanningBundle()); err != nil {
+		t.Fatalf("WritePlanningBundleFixture: %v", err)
+	}
+}
+
+func writeValidTasksJSON(t *testing.T, workspaceRoot string) {
+	t.Helper()
+	tasks := []Task{{
+		ID: "T001", Title: "Add health endpoint", Repository: "repo-a", RequirementIDs: []string{"R001"},
+		OwnershipConfidence: "HIGH", RepositoryRationale: "repo-a owns API", Status: StatusReviewPending,
+		Verification: []VerificationStep{{Command: "go test ./..."}},
+	}}
+	if err := SaveTasks(workspaceRoot, tasks); err != nil {
+		t.Fatalf("SaveTasks: %v", err)
+	}
+}
+
+func copyPlanningFixture(t *testing.T, workspaceRoot, fixtureName string) {
+	t.Helper()
+	srcDir := filepath.Join("..", "..", "testdata", "plans", fixtureName)
+	dstDir := PlanDraftDir(workspaceRoot)
+	if err := EnsureDir(dstDir); err != nil {
+		t.Fatalf("EnsureDir: %v", err)
+	}
+	for _, name := range []string{
+		"requirements.json", "assumptions.json", "risks.json", "impact.json", "repo-analysis.json", "workspace-verify.json",
+	} {
+		src := filepath.Join(srcDir, name)
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		data, err := os.ReadFile(src)
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", src, err)
+		}
+		if err := WriteFileAtomically(filepath.Join(dstDir, name), data); err != nil {
+			t.Fatalf("WriteFileAtomically: %v", err)
+		}
+	}
+}
+
+func submitFromTasksWithBundle(t *testing.T, workspaceRoot string) SubmitPlanResult {
+	t.Helper()
+	writeValidPlanningBundle(t, workspaceRoot)
+	writeValidTasksJSON(t, workspaceRoot)
+	result, err := SubmitPlan(workspaceRoot, SubmitPlanOptions{FromTasks: true})
+	if err != nil {
+		t.Fatalf("SubmitPlan from tasks: %v", err)
+	}
+	return result
+}
+
 func initGitRepo(repoPath string) error {
 	if err := os.MkdirAll(repoPath, 0o755); err != nil {
 		return err

@@ -72,15 +72,22 @@ func SubmitPlan(workspaceRoot string, opts SubmitPlanOptions) (SubmitPlanResult,
 		if err != nil {
 			return SubmitPlanResult{}, err
 		}
+		bundle, err := LoadPlanningDraftBundle(workspaceRoot)
+		if err != nil {
+			return SubmitPlanResult{}, err
+		}
 		taskReport, err := ValidateTaskPlan(workspaceRoot, sourceTasks, true)
 		if err != nil {
 			return SubmitPlanResult{}, err
 		}
-		if !taskReport.Valid {
-			result := SubmitPlanResult{Valid: false, Report: taskReport}
-			return result, fmt.Errorf("%w: fix tasks.json and resubmit", ErrPlanValidationFailed)
+		bundleEarly := ValidateDraftBundleEarly(workspaceRoot, bundle)
+		earlyReport := MergeValidationReports(taskReport, bundleEarly)
+		if !earlyReport.Valid {
+			_ = handleValidationFailure(workspaceRoot, &ws, earlyReport, ws.CurrentPlanRevision)
+			result := SubmitPlanResult{Valid: false, Report: earlyReport, Status: ws.WorkflowStatus}
+			return result, fmt.Errorf("%w: fix planning artifacts and resubmit", ErrPlanValidationFailed)
 		}
-		doc = BuildPlanFromTasks(workspaceRoot, sourceTasks, PlanFeature{
+		doc = MergeDraftBundleIntoPlan(bundle, sourceTasks, PlanFeature{
 			ID:    opts.FeatureID,
 			Title: opts.FeatureTitle,
 		})
@@ -106,6 +113,11 @@ func SubmitPlan(workspaceRoot string, opts SubmitPlanOptions) (SubmitPlanResult,
 	report, err := ValidatePlanDocument(workspaceRoot, doc)
 	if err != nil {
 		return SubmitPlanResult{}, err
+	}
+	if opts.FromTasks {
+		bundle, _ := LoadPlanningDraftBundle(workspaceRoot)
+		mergedReport := ValidateDraftBundleMerged(workspaceRoot, bundle, sourceTasks, doc)
+		report = MergeValidationReports(report, mergedReport)
 	}
 
 	fp, err := ComputePlanFingerprint(doc)
@@ -142,7 +154,7 @@ func SubmitPlan(workspaceRoot string, opts SubmitPlanOptions) (SubmitPlanResult,
 	} else {
 		doc.Plan.Status = string(WorkflowPlanGenerated)
 		ws.CurrentPlanRevision = nextRevision
-		ws.WorkflowStatus = WorkflowPlanGenerated
+		ws.WorkflowStatus = WorkflowClarificationNeeded
 	}
 
 	if err := SavePlanDocument(planPath, doc); err != nil {
@@ -167,8 +179,17 @@ func SubmitPlan(workspaceRoot string, opts SubmitPlanOptions) (SubmitPlanResult,
 	if err := SnapshotTasksRevision(workspaceRoot, nextRevision, tasks); err != nil {
 		return SubmitPlanResult{}, err
 	}
+	if opts.FromTasks {
+		if err := SnapshotPlanningDraftBundle(workspaceRoot, nextRevision); err != nil {
+			return SubmitPlanResult{}, err
+		}
+	}
 
 	result.Status = ws.WorkflowStatus
+	if !report.Valid {
+		_ = handleValidationFailure(workspaceRoot, &ws, report, nextRevision)
+		result.Status = ws.WorkflowStatus
+	}
 	if err := SaveWorkflowState(workspaceRoot, ws); err != nil {
 		return SubmitPlanResult{}, err
 	}
@@ -207,25 +228,32 @@ func ReviewPlan(workspaceRoot string) (PlanReviewJSON, PlanDocument, PlanValidat
 	return BuildPlanReviewJSON(workspaceRoot, doc, ws, report, runtimeTasks), doc, report, nil
 }
 
-func PreviewTaskPlan(workspaceRoot string) (PlanReviewJSON, PlanValidationReport, error) {
+func PreviewTaskPlan(workspaceRoot string) (PlanReviewJSON, PlanDocument, PlanValidationReport, error) {
 	ws, err := LoadWorkflowState(workspaceRoot)
 	if err != nil {
-		return PlanReviewJSON{}, PlanValidationReport{}, err
+		return PlanReviewJSON{}, PlanDocument{}, PlanValidationReport{}, err
 	}
 	tasks, err := LoadTasks(workspaceRoot)
 	if err != nil {
-		return PlanReviewJSON{}, PlanValidationReport{}, err
+		return PlanReviewJSON{}, PlanDocument{}, PlanValidationReport{}, err
 	}
-	report, err := ValidateTaskPlan(workspaceRoot, tasks, true)
+	taskReport, err := ValidateTaskPlan(workspaceRoot, tasks, true)
 	if err != nil {
-		return PlanReviewJSON{}, PlanValidationReport{}, err
+		return PlanReviewJSON{}, PlanDocument{}, PlanValidationReport{}, err
 	}
+	bundle, _ := LoadPlanningDraftBundle(workspaceRoot)
+	bundleEarly := ValidateDraftBundleEarly(workspaceRoot, bundle)
+	report := MergeValidationReports(taskReport, bundleEarly)
 	doc := PlanDocument{}
-	if ws.CurrentPlanRevision > 0 {
+	if Exists(PlanDraftRequirementsPath(workspaceRoot)) {
+		doc = MergeDraftBundleIntoPlan(bundle, tasks, PlanFeature{ID: "feature", Title: "Feature implementation plan"})
+		merged := ValidateDraftBundleMerged(workspaceRoot, bundle, tasks, doc)
+		report = MergeValidationReports(report, merged)
+	} else if ws.CurrentPlanRevision > 0 {
 		doc, _ = LoadCurrentPlanDocument(workspaceRoot)
 	}
 	payload := BuildPlanReviewJSON(workspaceRoot, doc, ws, report, tasks)
-	return payload, report, nil
+	return payload, doc, report, nil
 }
 
 func Replan(workspaceRoot string, reason string) (WorkflowState, error) {
@@ -259,6 +287,8 @@ func BuildPlanCommand() *cobra.Command {
 		Short: "Manage feature implementation plans",
 	}
 	plan.AddCommand(buildPlanSubmitCommand())
+	plan.AddCommand(buildPlanClarifyCommand())
+	plan.AddCommand(buildPlanClarifyRecordCommand())
 	return plan
 }
 
@@ -341,7 +371,7 @@ func BuildReviewCommand() *cobra.Command {
 			if len(tasks) == 0 {
 				tasks = payload.TaskItems
 			}
-			fmt.Print(RenderTasksReviewText(workspaceRoot, ws, tasks, report))
+			fmt.Print(RenderTasksReviewText(workspaceRoot, ws, tasks, doc, report))
 			_ = doc
 			return nil
 		},

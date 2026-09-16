@@ -53,13 +53,16 @@ This makes the development workflow more reliable and easier to resume.
 
 The most common failure mode in multi-repo AI-assisted development is not bad code — it is **bad planning**: wrong repo assignments, missing dependencies, and coding that starts before anyone reviews the breakdown.
 
-This tool addresses that with a **tasks.json-first planning workflow**:
+This tool addresses that with a **tasks.json-first planning workflow** backed by a strict **planning bundle** under `.feature/plans/draft/`:
 
 1. The agent reads `PLAN.md` and inspects relevant repositories (no production code changes during planning).
-2. The agent writes `.feature/tasks/tasks.json` with repo assignments, dependencies, verification commands, and optional planning metadata.
-3. `feature-dev plan submit --from-tasks` validates the plan and creates an immutable revision snapshot.
-4. `feature-dev review` presents the task list, repo assignments, dependency graph, and validation warnings for human review.
-5. `feature-dev approve` unlocks execution; `start` and `execute-loop` remain blocked until then.
+2. The agent writes the planning bundle: `requirements.json`, `assumptions.json`, `risks.json`, `impact.json`, `repo-analysis.json` (optional `workspace-verify.json`).
+3. The agent writes `.feature/tasks/tasks.json` with repo assignments, dependencies, verification commands, and planning metadata.
+4. `feature-dev plan submit --from-tasks` validates the bundle + tasks and creates an immutable revision snapshot.
+5. On validation failure, workflow enters `CLARIFICATION_NEEDED`; run `feature-dev plan clarify --json`, ask the user, update artifacts, and resubmit.
+6. `feature-dev review` presents tasks.json plus requirements, assumptions, risks, impact, and verification strategy for human review.
+7. `feature-dev approve` unlocks execution; `start` and `execute-loop` remain blocked until then.
+8. When all tasks are `DONE`, `feature-dev finalize --json` runs traceability + cross-repo verification and auto-sets `COMPLETED` on pass.
 
 Planning metadata on each task (optional but recommended):
 
@@ -72,10 +75,12 @@ Planning metadata on each task (optional but recommended):
 
 CLI validation catches structural plan problems before `REVIEW_PENDING`:
 
+- missing planning bundle files (requirements, assumptions, risks, impact, repo-analysis)
 - unknown or missing repository assignments
 - broken DAG (cycles, missing dependencies)
 - missing title or verification command
 - duplicate or empty task IDs
+- orphan requirements or untraced requirement IDs
 - **error**: LOW ownership confidence on a task with cross-repo downstream dependents
 - **warning**: cross-repo dependencies, untraced requirements, all tasks blocked
 
@@ -337,14 +342,18 @@ feature-dev init
 feature-dev discover
 feature-dev doctor
 feature-dev agent-hint --json
-# Agent analyzes PLAN.md + repos, writes .feature/tasks/tasks.json
+# Agent analyzes PLAN.md + repos, writes planning bundle + .feature/tasks/tasks.json
+feature-dev task preview --json
 feature-dev plan submit --from-tasks
+# on validation failure: feature-dev plan clarify --json → fix → resubmit
 feature-dev review --json
 feature-dev graph
 # user reviews tasks.json and approves
 feature-dev approve
 feature-dev reconcile
 feature-dev execute-loop --json
+# when all tasks DONE:
+feature-dev finalize --json
 # Agent implements the returned task in its assigned repository.
 # Repeat verification and execute-loop until every task is DONE.
 feature-dev status --json
@@ -501,13 +510,14 @@ Submit the plan for CLI validation and human review:
 
 ```bash
 feature-dev graph
+feature-dev task preview --json
 feature-dev plan submit --from-tasks
+# on failure: feature-dev plan clarify --json → fix bundle/tasks → resubmit
 feature-dev review
 feature-dev review --json   # machine-readable output for agents
-feature-dev task preview --json   # preview tasks without a submitted revision
 ```
 
-Review output leads with `.feature/tasks/tasks.json`: task list, repo assignments, dependency graph, and validation warnings. Approve explicitly when ready:
+Review output leads with `.feature/tasks/tasks.json` plus requirements, assumptions, risks, impact, and validation warnings. Approve explicitly when ready:
 
 ```bash
 feature-dev approve
@@ -721,8 +731,12 @@ feature-dev repositories
 feature-dev status
 feature-dev agent-hint
 feature-dev plan submit --from-tasks
+feature-dev plan clarify
 feature-dev review
 feature-dev task preview
+feature-dev traceability-check
+feature-dev verify-cross-repo
+feature-dev finalize
 feature-dev task add T001 "Task title"
 feature-dev plan-diff
 feature-dev approve
@@ -772,10 +786,14 @@ When a plan revision exists, the hint routes to review/approve before execution.
 
 | Reason | Meaning | Suggested next step |
 |--------|---------|---------------------|
+| `planning_bundle_incomplete` | draft bundle files missing | complete `.feature/plans/draft/` files |
 | `tasks_need_submit` | tasks.json exists but no revision submitted | `plan submit --from-tasks` |
-| `task_plan_invalid` | validation failed on last submit | fix tasks.json and resubmit |
-| `tasks_awaiting_approval` | plan in `REVIEW_PENDING` | present tasks.json and wait |
+| `plan_needs_clarification` | validation failed; workflow `CLARIFICATION_NEEDED` | `plan clarify --json`, ask user, fix, resubmit |
+| `task_plan_invalid` | validation failed on last submit | fix artifacts and resubmit |
+| `tasks_awaiting_approval` | plan in `REVIEW_PENDING` | present review and wait |
 | `plan_approved_ready` | approved; execution unlocked | `reconcile && execute-loop --json` |
+| `awaiting_final_verification` | all tasks DONE; final gates pending | `finalize --json` |
+| `feature_completed` | workflow `COMPLETED` | summarize outcome |
 
 Legacy workspaces without a plan revision keep the previous execute-loop behavior (no approval gate).
 
@@ -786,10 +804,15 @@ Submits an immutable plan revision. Primary path:
 feature-dev plan submit --from-tasks
 ```
 
-Also accepts a draft YAML file (`--from .feature/plans/draft/plan.yaml`) or the default draft location. Validates repo assignments, DAG, and verification before entering `REVIEW_PENDING`. On success, snapshots tasks to `.feature/plans/revision-NNN/tasks.json`.
+Requires the planning bundle under `.feature/plans/draft/` (requirements, assumptions, risks, impact, repo-analysis) plus `tasks.json`. Validates strictly before `REVIEW_PENDING`. On failure, sets `CLARIFICATION_NEEDED` and writes `clarification-request.json`.
+
+Also accepts a draft YAML file (`--from .feature/plans/draft/plan.yaml`) for legacy workspaces without a bundle.
+
+### `feature-dev plan clarify`
+Shows targeted clarification questions from the last failed validation (`--json` recommended for agents).
 
 ### `feature-dev review`
-Loads the current plan revision and presents a **tasks.json-first** review: task list, repo assignments, dependency graph, and validation warnings. Use `--json` for agent automation.
+Loads the current plan revision and presents a **tasks.json-first** review plus requirements, assumptions, risks, impact, and verification strategy. Use `--json` for agent automation.
 
 Example human output:
 
@@ -809,6 +832,15 @@ USER APPROVAL REQUIRED
 
 ### `feature-dev task preview`
 Preview the current `.feature/tasks/tasks.json` plan with validation results and graph output without requiring a submitted revision.
+
+### `feature-dev traceability-check`
+Verify every requirement is satisfied by DONE tasks (post-implementation gate).
+
+### `feature-dev verify-cross-repo`
+Run workspace-level cross-repo integration commands from the approved plan revision.
+
+### `feature-dev finalize`
+Run traceability + cross-repo verification; auto-sets workflow `COMPLETED` when both pass.
 
 ### `feature-dev approve`
 Approves the current plan revision and unlocks dependency-ready tasks to `READY`. Required before `start` or `execute-loop` when a plan revision exists.
@@ -903,10 +935,12 @@ When to execute which:
 This repository includes the core orchestration MVP and planning hardening. It includes:
 
 - workspace bootstrap and repository discovery
-- **deep planning workflow** with tasks.json as the primary review artifact
+- **deep planning workflow** with planning bundle + tasks.json as review artifacts
+- **strict pre-approval validation** and **clarification loop** on validation failure
 - **CLI task plan validation** (repo assignments, DAG, verification, ownership confidence)
 - human review and approval gate before implementation
-- immutable plan revisions and tasks snapshots under `.feature/plans/revision-NNN/`
+- immutable plan revisions and bundle/tasks snapshots under `.feature/plans/revision-NNN/`
+- post-implementation **traceability-check**, **verify-cross-repo**, and **finalize** auto-`COMPLETED`
 - tasks.json-first review output (human and JSON)
 - plan validation, review artifacts, and plan diff
 - task state machine and dependency readiness

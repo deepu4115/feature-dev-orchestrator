@@ -82,6 +82,11 @@ func BuildAgentHint(workspaceRoot string) (AgentHint, error) {
 
 	if RequiresPlanApproval(ws) {
 		switch ws.WorkflowStatus {
+		case WorkflowClarificationNeeded:
+			hint.Reason = "plan_needs_clarification"
+			hint.SuggestedNextCommand = "feature-dev plan clarify --json"
+			hint.SuggestedPrompt = "Validation failed. Present clarification questions, wait for my answers, update the planning bundle, and resubmit with plan submit --from-tasks."
+			return hint, nil
 		case WorkflowReviewPending:
 			hint.Reason = "tasks_awaiting_approval"
 			hint.SuggestedNextCommand = "feature-dev review --json"
@@ -89,8 +94,8 @@ func BuildAgentHint(workspaceRoot string) (AgentHint, error) {
 			return hint, nil
 		case WorkflowPlanGenerated:
 			hint.Reason = "task_plan_invalid"
-			hint.SuggestedNextCommand = "feature-dev task preview --json"
-			hint.SuggestedPrompt = "Fix tasks.json validation issues, then run feature-dev plan submit --from-tasks."
+			hint.SuggestedNextCommand = "feature-dev plan clarify --json"
+			hint.SuggestedPrompt = "Fix plan validation issues using clarification-request.json, then resubmit with plan submit --from-tasks."
 			return hint, nil
 		case WorkflowReplanning:
 			hint.Reason = "plan_replanning"
@@ -106,6 +111,26 @@ func BuildAgentHint(workspaceRoot string) (AgentHint, error) {
 			hint.Reason = "plan_approved_ready"
 			hint.SuggestedNextCommand = "feature-dev reconcile && feature-dev execute-loop --json"
 			hint.SuggestedPrompt = "The plan is approved. Continue autonomous execute-loop cycles until all tasks are DONE."
+			return hint, nil
+		case WorkflowExecuting:
+			hint.Reason = "ready_for_orchestration"
+			hint.SuggestedNextCommand = "feature-dev execute-loop --json"
+			hint.SuggestedPrompt = "Implementation in progress. Continue execute-loop until all tasks are DONE."
+			return hint, nil
+		case WorkflowVerifying:
+			if allTasksInStatus(tasks, StatusDone) {
+				hint.Reason = "awaiting_final_verification"
+				hint.SuggestedNextCommand = "feature-dev finalize --json"
+				hint.SuggestedPrompt = "All tasks are DONE. Run finalize to complete traceability and cross-repo verification."
+				return hint, nil
+			}
+			hint.Reason = "ready_for_orchestration"
+			hint.SuggestedNextCommand = "feature-dev execute-loop --json"
+			return hint, nil
+		case WorkflowCompleted:
+			hint.Reason = "feature_completed"
+			hint.SuggestedNextCommand = "feature-dev status --json"
+			hint.SuggestedPrompt = "Feature workflow is COMPLETED. Summarize outcomes and verification results."
 			return hint, nil
 		default:
 			if ws.WorkflowStatus != WorkflowExecuting && ws.WorkflowStatus != WorkflowCompleted {
@@ -127,9 +152,15 @@ func BuildAgentHint(workspaceRoot string) (AgentHint, error) {
 		hint.SuggestedNextCommand = "feature-dev task add T001 \"Define first feature slice\""
 		hint.SuggestedPrompt = "Analyze PLAN.md and repositories, write .feature/tasks/tasks.json with repo assignments and dependencies, then run plan submit --from-tasks."
 	case hint.TotalTasks > 0 && ws.CurrentPlanRevision == 0:
-		hint.Reason = "tasks_need_submit"
-		hint.SuggestedNextCommand = "feature-dev plan submit --from-tasks"
-		hint.SuggestedPrompt = "Submit the tasks.json plan for validation and user review before implementation."
+		if !Exists(PlanDraftRequirementsPath(workspaceRoot)) {
+			hint.Reason = "planning_bundle_incomplete"
+			hint.SuggestedNextCommand = "feature-dev task preview --json"
+			hint.SuggestedPrompt = "Write the planning bundle under .feature/plans/draft/ (requirements, assumptions, risks, impact, repo-analysis) and tasks.json, then plan submit --from-tasks."
+		} else {
+			hint.Reason = "tasks_need_submit"
+			hint.SuggestedNextCommand = "feature-dev plan submit --from-tasks"
+			hint.SuggestedPrompt = "Submit the tasks.json plan for validation and user review before implementation."
+		}
 	case len(hint.ImplementedTasks) > 0 || len(hint.RunningTasks) > 0 || len(hint.ReadyTasks) > 0:
 		hint.Reason = "ready_for_orchestration"
 		hint.SuggestedNextCommand = "feature-dev reconcile && feature-dev execute-loop --json"
@@ -139,9 +170,19 @@ func BuildAgentHint(workspaceRoot string) (AgentHint, error) {
 		hint.SuggestedNextCommand = "feature-dev reconcile"
 		hint.SuggestedPrompt = "Use feature-dev command, reconcile stale state, fix blocked dependencies, and continue orchestration."
 	default:
-		hint.Reason = "all_tasks_done"
-		hint.SuggestedNextCommand = "feature-dev status --json"
-		hint.SuggestedPrompt = "Use feature-dev command to summarize completion and final verification state."
+		if ws.WorkflowStatus == WorkflowCompleted {
+			hint.Reason = "feature_completed"
+			hint.SuggestedNextCommand = "feature-dev status --json"
+			hint.SuggestedPrompt = "Feature workflow is COMPLETED."
+		} else if allTasksInStatus(tasks, StatusDone) {
+			hint.Reason = "awaiting_final_verification"
+			hint.SuggestedNextCommand = "feature-dev finalize --json"
+			hint.SuggestedPrompt = "All tasks are DONE. Run finalize to complete the feature."
+		} else {
+			hint.Reason = "all_tasks_done"
+			hint.SuggestedNextCommand = "feature-dev status --json"
+			hint.SuggestedPrompt = "Use feature-dev command to summarize completion and final verification state."
+		}
 	}
 
 	return hint, nil

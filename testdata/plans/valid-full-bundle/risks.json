@@ -1,0 +1,10 @@
+{
+  "risks": [
+    {
+      "id": "RK001",
+      "level": "MEDIUM",
+      "description": "API contract change",
+      "mitigation": ["add regression tests"]
+    }
+  ]
+}

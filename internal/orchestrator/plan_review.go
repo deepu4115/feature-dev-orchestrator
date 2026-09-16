@@ -17,9 +17,15 @@ type PlanReviewJSON struct {
 	Graph               map[string]any        `json:"graph"`
 	Tasks               int                   `json:"task_count"`
 	Repositories        int                   `json:"repositories"`
+	RequirementItems    []PlanRequirement     `json:"requirements,omitempty"`
+	AssumptionItems     []PlanAssumption      `json:"assumption_items,omitempty"`
 	Assumptions         int                   `json:"assumptions"`
 	HighRiskAssumptions int                   `json:"high_risk_assumptions"`
+	RiskItems           []PlanRisk            `json:"risk_items,omitempty"`
 	Risks               map[string]int        `json:"risks"`
+	Impact              map[string][]string   `json:"impact,omitempty"`
+	RepoAnalysis        []DraftRepoAnalysisEntry `json:"repo_analysis,omitempty"`
+	VerificationStrategy map[string][]string  `json:"verification_strategy,omitempty"`
 	Validation          map[string]string     `json:"validation"`
 	Errors              []PlanValidationIssue `json:"errors,omitempty"`
 	Warnings            []PlanValidationIssue `json:"warnings,omitempty"`
@@ -50,16 +56,21 @@ func BuildPlanReviewJSON(workspaceRoot string, doc PlanDocument, ws WorkflowStat
 		Graph:               BuildTaskGraphPayload(runtimeTasks),
 		Tasks:               len(runtimeTasks),
 		Repositories:        len(doc.Repositories),
+		RequirementItems:    doc.Requirements,
+		AssumptionItems:     doc.Assumptions,
 		Assumptions:         len(doc.Assumptions),
 		HighRiskAssumptions: highRiskAssumptions,
+		RiskItems:           doc.Risks,
 		Risks:               riskCounts,
+		Impact:              doc.ExpectedChangeAreas,
+		VerificationStrategy: doc.Verification.ByRepo,
 		Validation:          report.Checks,
 		Errors:              report.Errors,
 		Warnings:            report.Warnings,
 	}
 }
 
-func RenderTasksReviewText(workspaceRoot string, ws WorkflowState, tasks []Task, report PlanValidationReport) string {
+func RenderTasksReviewText(workspaceRoot string, ws WorkflowState, tasks []Task, doc PlanDocument, report PlanValidationReport) string {
 	var b strings.Builder
 	b.WriteString("Task Plan Review")
 	if ws.CurrentPlanRevision > 0 {
@@ -87,6 +98,44 @@ func RenderTasksReviewText(workspaceRoot string, ws WorkflowState, tasks []Task,
 	}
 	b.WriteString("\nDependency graph:\n")
 	b.WriteString(RenderTaskGraphASCII(tasks))
+	if len(doc.Requirements) > 0 {
+		b.WriteString("\nRequirements:\n")
+		for _, req := range doc.Requirements {
+			line := fmt.Sprintf("  %s: %s", req.ID, req.Description)
+			if len(req.Tasks) > 0 {
+				line += fmt.Sprintf(" -> tasks: %s", strings.Join(req.Tasks, ", "))
+			}
+			b.WriteString(line + "\n")
+		}
+	}
+	if len(doc.Assumptions) > 0 {
+		b.WriteString("\nAssumptions:\n")
+		for _, a := range doc.Assumptions {
+			flag := ""
+			if strings.ToUpper(a.Confidence) == "LOW" && strings.ToUpper(a.Impact) == "HIGH" {
+				flag = " [LOW/HIGH]"
+			}
+			b.WriteString(fmt.Sprintf("  %s%s: %s\n", a.ID, flag, a.Statement))
+		}
+	}
+	if len(doc.Risks) > 0 {
+		b.WriteString("\nRisks:\n")
+		for _, r := range doc.Risks {
+			b.WriteString(fmt.Sprintf("  %s [%s]: %s\n", r.ID, r.Level, r.Description))
+		}
+	}
+	if len(doc.ExpectedChangeAreas) > 0 {
+		b.WriteString("\nImpact:\n")
+		for repo, areas := range doc.ExpectedChangeAreas {
+			b.WriteString(fmt.Sprintf("  %s: %s\n", repo, strings.Join(areas, ", ")))
+		}
+	}
+	if len(doc.Verification.ByRepo) > 0 {
+		b.WriteString("\nVerification strategy:\n")
+		for repo, cmds := range doc.Verification.ByRepo {
+			b.WriteString(fmt.Sprintf("  %s: %s\n", repo, strings.Join(cmds, ", ")))
+		}
+	}
 	if len(report.Warnings) > 0 {
 		b.WriteString("\nWarnings:\n")
 		for _, w := range report.Warnings {
@@ -103,6 +152,8 @@ func RenderTasksReviewText(workspaceRoot string, ws WorkflowState, tasks []Task,
 		b.WriteString("\nUSER APPROVAL REQUIRED\n")
 	} else if ws.WorkflowStatus == WorkflowApproved {
 		b.WriteString("\nApproved.\n")
+	} else if ws.WorkflowStatus == WorkflowClarificationNeeded {
+		b.WriteString("\nCLARIFICATION NEEDED — run feature-dev plan clarify --json\n")
 	}
 	return b.String()
 }

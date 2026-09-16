@@ -55,10 +55,10 @@ func TestAgentHint_TasksNeedSubmit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildAgentHint: %v", err)
 	}
-	if hint.Reason != "tasks_need_submit" {
-		t.Fatalf("expected tasks_need_submit, got %s", hint.Reason)
+	if hint.Reason != "planning_bundle_incomplete" {
+		t.Fatalf("expected planning_bundle_incomplete, got %s", hint.Reason)
 	}
-	if hint.SuggestedNextCommand != "feature-dev plan submit --from-tasks" {
+	if hint.SuggestedNextCommand != "feature-dev task preview --json" {
 		t.Fatalf("unexpected next command: %s", hint.SuggestedNextCommand)
 	}
 }

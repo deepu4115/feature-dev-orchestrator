@@ -39,6 +39,9 @@ func BuildRootCommand() *cobra.Command {
 	root.AddCommand(BuildFailTaskCommand())
 	root.AddCommand(BuildReconcileCommand())
 	root.AddCommand(BuildVerifyWorkspaceCommand())
+	root.AddCommand(BuildTraceabilityCheckCommand())
+	root.AddCommand(BuildVerifyCrossRepoCommand())
+	root.AddCommand(BuildFinalizeCommand())
 	root.AddCommand(BuildExecuteNextCommand())
 	root.AddCommand(BuildExecuteLoopCommand())
 
@@ -170,6 +173,9 @@ func BuildStatusCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			tasks, _ := LoadTasks(workspaceRoot)
+			done, total := countTasksDone(tasks)
+			completionReady := done == total && total > 0 && ws.WorkflowStatus != WorkflowCompleted
 			payload := map[string]any{
 				"workspace":              workspaceRoot,
 				"feature_dir":            ResolveFeatureDir(workspaceRoot),
@@ -177,6 +183,10 @@ func BuildStatusCommand() *cobra.Command {
 				"current_plan_revision":  ws.CurrentPlanRevision,
 				"approved_plan_revision": ws.ApprovedPlanRevision,
 				"approval_required":      ApprovalRequired(ws),
+				"tasks_done":             done,
+				"tasks_total":            total,
+				"completion_ready":       completionReady,
+				"final_gates":            []string{"traceability-check", "verify-cross-repo", "finalize"},
 			}
 			if jsonFlag {
 				enc := json.NewEncoder(os.Stdout)

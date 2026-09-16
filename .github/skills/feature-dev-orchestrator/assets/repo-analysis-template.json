@@ -1,0 +1,11 @@
+{
+  "repositories": [
+    {
+      "repository": "repo-a",
+      "evidence": [
+        "repo-a/main.go",
+        "repo-a/internal/handlers"
+      ]
+    }
+  ]
+}

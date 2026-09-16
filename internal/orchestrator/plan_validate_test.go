@@ -111,8 +111,44 @@ func TestValidatePlan_InvalidStaysPlanGenerated(t *testing.T) {
 		t.Fatal("expected invalid submit")
 	}
 	ws, _ := LoadWorkflowState(workspaceRoot)
-	if ws.WorkflowStatus != WorkflowPlanGenerated {
-		t.Fatalf("expected PLAN_GENERATED, got %s", ws.WorkflowStatus)
+	if ws.WorkflowStatus != WorkflowClarificationNeeded {
+		t.Fatalf("expected CLARIFICATION_NEEDED, got %s", ws.WorkflowStatus)
+	}
+	if _, err := os.Stat(PlanDraftClarificationRequestPath(workspaceRoot)); err != nil {
+		t.Fatalf("expected clarification request: %v", err)
+	}
+}
+
+func TestValidateDraftBundleEarly_RejectsMissingAssumptions(t *testing.T) {
+	workspaceRoot := setupTestWorkspace(t)
+	copyPlanningFixture(t, workspaceRoot, "invalid-missing-assumptions")
+	bundle, _ := LoadPlanningDraftBundle(workspaceRoot)
+	report := ValidateDraftBundleEarly(workspaceRoot, bundle)
+	if report.Valid || !hasCode(report.Errors, "missing_assumptions_file") {
+		t.Fatalf("expected missing_assumptions_file, got %#v", report.Errors)
+	}
+}
+
+func TestValidateDraftBundleEarly_RejectsMissingRisks(t *testing.T) {
+	workspaceRoot := setupTestWorkspace(t)
+	copyPlanningFixture(t, workspaceRoot, "invalid-missing-risks")
+	bundle, _ := LoadPlanningDraftBundle(workspaceRoot)
+	report := ValidateDraftBundleEarly(workspaceRoot, bundle)
+	if report.Valid || !hasCode(report.Errors, "missing_risks_file") {
+		t.Fatalf("expected missing_risks_file, got %#v", report.Errors)
+	}
+}
+
+func TestValidateDraftBundleMerged_RejectsOrphanRequirement(t *testing.T) {
+	workspaceRoot := setupTestWorkspace(t)
+	copyPlanningFixture(t, workspaceRoot, "invalid-untraced-requirement")
+	writeValidTasksJSON(t, workspaceRoot)
+	bundle, _ := LoadPlanningDraftBundle(workspaceRoot)
+	tasks, _ := LoadTasks(workspaceRoot)
+	doc := MergeDraftBundleIntoPlan(bundle, tasks, PlanFeature{ID: "feature", Title: "Feature implementation plan"})
+	report := ValidateDraftBundleMerged(workspaceRoot, bundle, tasks, doc)
+	if report.Valid || !hasCode(report.Errors, "orphan_requirement") {
+		t.Fatalf("expected orphan_requirement, got %#v", report.Errors)
 	}
 }
 

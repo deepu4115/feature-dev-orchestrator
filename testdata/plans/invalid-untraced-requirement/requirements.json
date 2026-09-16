@@ -1,0 +1,12 @@
+{
+  "requirements": [
+    {
+      "id": "R001",
+      "description": "Add health endpoint"
+    },
+    {
+      "id": "R002",
+      "description": "Orphan requirement with no task"
+    }
+  ]
+}

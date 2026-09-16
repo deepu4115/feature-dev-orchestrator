@@ -1,0 +1,8 @@
+{
+  "repositories": [
+    {
+      "repository": "repo-a",
+      "evidence": ["repo-a/main.go"]
+    }
+  ]
+}

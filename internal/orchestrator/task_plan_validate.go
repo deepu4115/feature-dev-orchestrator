@@ -173,11 +173,30 @@ func ValidateTaskPlan(workspaceRoot string, tasks []Task, fromTasks bool) (PlanV
 				break
 			}
 		}
-		if !hasRequirementTrace && !Exists(filepath.Join(PlansDir(workspaceRoot), "draft", "requirements.json")) {
-			report.Warnings = append(report.Warnings, PlanValidationIssue{
-				Level: "warning", Code: "requirements_not_explicitly_traced",
+		if !hasRequirementTrace && !Exists(PlanDraftRequirementsPath(workspaceRoot)) {
+			report.Valid = false
+			report.Errors = append(report.Errors, PlanValidationIssue{
+				Level: "error", Code: "requirements_not_explicitly_traced",
 				Message: "requirements not explicitly traced; add requirement_ids on tasks or .feature/plans/draft/requirements.json",
 			})
+		}
+		if Exists(PlanDraftRequirementsPath(workspaceRoot)) {
+			bundle, _ := LoadPlanningDraftBundle(workspaceRoot)
+			reqIDs := map[string]bool{}
+			for _, r := range bundle.Requirements.Requirements {
+				reqIDs[r.ID] = true
+			}
+			for _, task := range tasks {
+				for _, reqID := range task.RequirementIDs {
+					if !reqIDs[reqID] {
+						report.Valid = false
+						report.Errors = append(report.Errors, PlanValidationIssue{
+							Level: "error", Code: "unknown_requirement_id",
+							Message: fmt.Sprintf("task %s references unknown requirement %s", task.ID, reqID),
+						})
+					}
+				}
+			}
 		}
 	}
 
