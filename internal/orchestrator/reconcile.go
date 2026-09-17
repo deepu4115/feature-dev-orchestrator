@@ -17,6 +17,10 @@ type ReconcileReport struct {
 }
 
 func ReconcileTasks(workspaceRoot string, tasks []Task) (ReconcileReport, error) {
+	ws, err := LoadWorkflowState(workspaceRoot)
+	if err != nil {
+		return ReconcileReport{}, err
+	}
 	if workspaceRoot == "" {
 		return ReconcileReport{}, fmt.Errorf("workspace root cannot be empty")
 	}
@@ -62,6 +66,15 @@ func ReconcileTasks(workspaceRoot string, tasks []Task) (ReconcileReport, error)
 	}
 	report.StaleCount = len(report.Tasks)
 	report.Tasks = reconciled
+
+	if isExecutionAllowedWorkflowStatus(ws.WorkflowStatus) {
+		unlocked, err := PromoteDependencyReadyTasks(report.Tasks)
+		if err != nil {
+			return report, err
+		}
+		report.UpdatedCount += len(unlocked)
+	}
+
 	return report, nil
 }
 
@@ -74,6 +87,7 @@ func BuildReconcileCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			tasks, err := LoadTasks(workspaceRoot)
 			if err != nil {
 				return err
@@ -85,6 +99,21 @@ func BuildReconcileCommand() *cobra.Command {
 			report, err := ReconcileTasks(workspaceRoot, tasks)
 			if err != nil {
 				return err
+			}
+			if dryRun {
+				jsonFlag, _ := cmd.Flags().GetBool("json")
+				if jsonFlag {
+					enc := json.NewEncoder(os.Stdout)
+					enc.SetIndent("", "  ")
+					return enc.Encode(map[string]any{
+						"dry_run":     true,
+						"updated":     report.UpdatedCount,
+						"reconciled":  report.StaleCount,
+						"total_tasks": len(report.Tasks),
+					})
+				}
+				fmt.Printf("dry run: would reconcile %d task(s)\n", report.UpdatedCount)
+				return nil
 			}
 			if err := SaveTasks(workspaceRoot, report.Tasks); err != nil {
 				return err
@@ -116,5 +145,6 @@ func BuildReconcileCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().Bool("json", false, "Emit reconcile summary as JSON")
+	cmd.Flags().Bool("dry-run", false, "Show planned reconcile actions without mutating task state")
 	return cmd
 }

@@ -76,10 +76,16 @@ func ValidateGraph(tasks []Task) ([]Task, error) {
 	return tasks, nil
 }
 
-func ReadyTasks(tasks []Task) ([]Task, error) {
+func ReadyTasks(workspaceRoot string, tasks []Task) ([]Task, error) {
 	if _, err := ValidateGraph(tasks); err != nil {
 		return nil, err
 	}
+
+	ws, err := LoadWorkflowState(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	gated := RequiresPlanApproval(ws)
 
 	byID := map[string]Task{}
 	for _, task := range tasks {
@@ -88,7 +94,11 @@ func ReadyTasks(tasks []Task) ([]Task, error) {
 
 	ready := make([]Task, 0)
 	for _, task := range tasks {
-		if task.Status != StatusPlanned && task.Status != StatusBlocked && task.Status != StatusRework && task.Status != StatusFailed {
+		if gated {
+			if task.Status != StatusReady {
+				continue
+			}
+		} else if task.Status != StatusPlanned && task.Status != StatusBlocked && task.Status != StatusRework && task.Status != StatusFailed {
 			continue
 		}
 		blocked := false
@@ -126,20 +136,40 @@ func SaveTasks(workspaceRoot string, tasks []Task) error {
 	return WriteFileAtomically(path, append(data, '\n'))
 }
 
-func LoadTasks(workspaceRoot string) ([]Task, error) {
+type TasksLoadResult struct {
+	Tasks  []Task
+	Report PlanValidationReport
+}
+
+func LoadTasksWithReport(workspaceRoot string) (TasksLoadResult, error) {
 	path := TaskStoragePath(workspaceRoot)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return []Task{}, nil
+			return TasksLoadResult{Tasks: []Task{}, Report: structuralReportFromIssues(nil)}, nil
 		}
-		return nil, err
+		return TasksLoadResult{}, err
 	}
 	var tasks []Task
 	if err := json.Unmarshal(data, &tasks); err != nil {
-		return nil, fmt.Errorf("unmarshal tasks: %w", err)
+		issues := translateTasksJSONError(path, data, err)
+		return TasksLoadResult{
+			Tasks:  []Task{},
+			Report: structuralReportFromIssues(issues),
+		}, nil
 	}
-	return tasks, nil
+	return TasksLoadResult{Tasks: tasks, Report: structuralReportFromIssues(nil)}, nil
+}
+
+func LoadTasks(workspaceRoot string) ([]Task, error) {
+	result, err := LoadTasksWithReport(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	if !result.Report.Valid {
+		return nil, fmt.Errorf("%s", result.Report.Errors[0].Message)
+	}
+	return result.Tasks, nil
 }
 
 func TaskSummary(tasks []Task) map[string]any {

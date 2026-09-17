@@ -1,0 +1,51 @@
+{
+  "repositories": [
+    {
+      "repository": "user-service",
+      "evidence": [
+        "user-service/src/main/java/com/example/user/api/UserController.java",
+        "user-service/src/main/java/com/example/user/api/AuthController.java",
+        "user-service/src/main/java/com/example/user/security/SecurityConfig.java"
+      ]
+    },
+    {
+      "repository": "product-service",
+      "evidence": [
+        "product-service/src/main/java/com/example/product/api/controller/ProductController.java",
+        "product-service/src/main/java/com/example/product/application/service/ProductService.java",
+        "product-service/src/main/java/com/example/product/domain/model/Product.java"
+      ]
+    },
+    {
+      "repository": "order-service",
+      "evidence": [
+        "order-service/src/main/java/com/example/order/api/CartController.java",
+        "order-service/src/main/java/com/example/order/api/OrderController.java",
+        "order-service/src/main/java/com/example/order/infrastructure/integration/ProductFeignClient.java"
+      ]
+    },
+    {
+      "repository": "shared-token-validation-lib",
+      "evidence": [
+        "shared-token-validation-lib/src/main/java/com/rajugowda/jwt/validator/filters/JwtFailFastAuthFilter.java",
+        "shared-token-validation-lib/src/main/java/com/rajugowda/jwt/validator/filters/FilterFactory.java",
+        "shared-token-validation-lib/src/main/java/com/rajugowda/jwt/validator/config/TokenValidatorAutoConfiguration.java"
+      ]
+    },
+    {
+      "repository": "api-gateway",
+      "evidence": [
+        "api-gateway/src/main/java/com/example/api_gateway/ApiGatewayApplication.java",
+        "api-gateway/src/main/resources/application.yml"
+      ]
+    },
+    {
+      "repository": "config-server",
+      "evidence": [
+        "config-server/src/main/java/com/example/config/ConfigServerApplication.java",
+        "config-server/src/main/resources/application.yml"
+      ]
+    }
+  ]
+}
+

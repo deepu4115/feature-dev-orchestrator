@@ -1,0 +1,11 @@
+schema_version: "1.0"
+repository_discovery:
+    mode: auto
+    include:
+        - ./*
+    exclude:
+        - .git
+        - node_modules
+        - dist
+        - build
+        - target

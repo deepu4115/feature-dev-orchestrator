@@ -61,7 +61,17 @@ func ExecuteNext(workspaceRoot string, opts ExecuteNextOptions) (ExecuteNextResu
 		}
 	}
 
-	selectedIdx, readyCount, err := selectNextTask(tasks, opts.TaskID)
+	if err := CanExecute(workspaceRoot); err != nil {
+		ready, _ := ReadyTasks(workspaceRoot, tasks)
+		return ExecuteNextResult{
+			Action:         "plan_not_approved",
+			Message:        err.Error(),
+			Reconciled:     reconcileReport.UpdatedCount,
+			ReadyQueueSize: len(ready),
+		}, err
+	}
+
+	selectedIdx, readyCount, err := selectNextTask(workspaceRoot, tasks, opts.TaskID)
 	if err != nil {
 		return ExecuteNextResult{}, err
 	}
@@ -125,6 +135,13 @@ func ExecuteNext(workspaceRoot string, opts ExecuteNextOptions) (ExecuteNextResu
 		if err := SaveTasks(workspaceRoot, tasks); err != nil {
 			return ExecuteNextResult{}, err
 		}
+		tasks, unlocked, _ := PromoteTasksAfterCompletion(workspaceRoot, tasks)
+		if len(unlocked) > 0 {
+			if err := SaveTasks(workspaceRoot, tasks); err != nil {
+				return ExecuteNextResult{}, err
+			}
+		}
+		_ = SyncWorkflowFromTasks(workspaceRoot)
 		result.StatusAfter = tasks[idx].Status
 		result.Message = "verification passed and task marked DONE"
 		return result, nil
@@ -161,6 +178,7 @@ func ExecuteNext(workspaceRoot string, opts ExecuteNextOptions) (ExecuteNextResu
 		if err := SaveTasks(workspaceRoot, tasks); err != nil {
 			return ExecuteNextResult{}, err
 		}
+		_ = SyncWorkflowFromTasks(workspaceRoot)
 
 		ctx, err := BuildTaskContext(workspaceRoot, tasks[selectedIdx], opts.ContextLevel, opts.ContextBudget)
 		if err != nil {
@@ -173,7 +191,7 @@ func ExecuteNext(workspaceRoot string, opts ExecuteNextOptions) (ExecuteNextResu
 	}
 }
 
-func selectNextTask(tasks []Task, requestedTaskID string) (int, int, error) {
+func selectNextTask(workspaceRoot string, tasks []Task, requestedTaskID string) (int, int, error) {
 	if requestedTaskID != "" {
 		for i, task := range tasks {
 			if task.ID == requestedTaskID {
@@ -183,7 +201,7 @@ func selectNextTask(tasks []Task, requestedTaskID string) (int, int, error) {
 		return -1, 0, fmt.Errorf("task %s not found", requestedTaskID)
 	}
 
-	ready, err := ReadyTasks(tasks)
+	ready, err := ReadyTasks(workspaceRoot, tasks)
 	if err != nil {
 		return -1, 0, err
 	}
@@ -301,6 +319,11 @@ func ExecuteLoop(workspaceRoot string, opts ExecuteLoopOptions) (ExecuteLoopResu
 	for i := 0; i < opts.MaxSteps; i++ {
 		step, err := ExecuteNext(workspaceRoot, opts.ExecuteNextOptions)
 		if err != nil {
+			if len(loop.Steps) == 0 && step.Action == "plan_not_approved" {
+				loop.Steps = append(loop.Steps, step)
+				loop.StoppedReason = "plan_not_approved"
+				return loop, err
+			}
 			return loop, err
 		}
 		loop.Steps = append(loop.Steps, step)
@@ -309,8 +332,20 @@ func ExecuteLoop(workspaceRoot string, opts ExecuteLoopOptions) (ExecuteLoopResu
 
 		switch step.Action {
 		case "noop":
+			tasks, _ := LoadTasks(workspaceRoot)
+			if allTasksInStatus(tasks, StatusDone) {
+				if fin, finErr := MaybeAutoCompleteFeature(workspaceRoot, opts.Timeout); finErr == nil && fin.Completed {
+					loop.StoppedReason = "feature_completed"
+					return loop, nil
+				}
+				loop.StoppedReason = "awaiting_final_verification"
+				return loop, nil
+			}
 			loop.StoppedReason = "no_executable_task"
 			return loop, nil
+		case "plan_not_approved":
+			loop.StoppedReason = "plan_not_approved"
+			return loop, fmt.Errorf("%s", step.Message)
 		case "implement", "start":
 			loop.StoppedReason = "awaiting_code_changes"
 			return loop, nil

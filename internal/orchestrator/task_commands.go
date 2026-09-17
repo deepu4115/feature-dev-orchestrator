@@ -14,12 +14,17 @@ func BuildTaskCommand() *cobra.Command {
 		Use:   "task",
 		Short: "Manage workspace tasks",
 	}
+	cmd.AddCommand(BuildTaskInitCommand())
 	cmd.AddCommand(BuildAddTaskCommand())
 	cmd.AddCommand(BuildListTasksCommand())
 	cmd.AddCommand(BuildReadyTaskListCommand())
+	cmd.AddCommand(BuildTaskPreviewCommand())
 	cmd.AddCommand(BuildStartTaskCommand())
+	cmd.AddCommand(BuildImplementTaskCommand())
 	cmd.AddCommand(BuildCompleteTaskCommand())
 	cmd.AddCommand(BuildFailTaskCommand())
+	cmd.AddCommand(BuildTaskExplainCommand())
+	cmd.AddCommand(BuildTaskValidateCommand())
 	return cmd
 }
 
@@ -104,7 +109,7 @@ func BuildReadyTaskListCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ready, err := ReadyTasks(tasks)
+			ready, err := ReadyTasks(workspaceRoot, tasks)
 			if err != nil {
 				return err
 			}
@@ -143,7 +148,16 @@ func BuildStartTaskCommand() *cobra.Command {
 				return fmt.Errorf("task %s not found", args[0])
 			}
 
-			ready, err := ReadyTasks(tasks)
+			if err := CanExecute(workspaceRoot); err != nil {
+				return err
+			}
+
+			ws, err := LoadWorkflowState(workspaceRoot)
+			if err != nil {
+				return err
+			}
+
+			ready, err := ReadyTasks(workspaceRoot, tasks)
 			if err != nil {
 				return err
 			}
@@ -156,6 +170,15 @@ func BuildStartTaskCommand() *cobra.Command {
 			}
 			if !isReady && tasks[idx].Status != StatusReady {
 				return fmt.Errorf("task %s is not ready", args[0])
+			}
+
+			if RequiresPlanApproval(ws) {
+				if tasks[idx].Status != StatusReady {
+					return fmt.Errorf("task %s is not ready", args[0])
+				}
+				if err := CanStartTaskInWorkspace(workspaceRoot, tasks[idx]); err != nil {
+					return err
+				}
 			}
 
 			if tasks[idx].Status != StatusReady {
@@ -173,6 +196,55 @@ func BuildStartTaskCommand() *cobra.Command {
 				return err
 			}
 			fmt.Printf("task %s is now RUNNING\n", args[0])
+			return nil
+		},
+	}
+	return cmd
+}
+
+func ImplementTask(workspaceRoot string, taskID string) error {
+	if err := CanExecute(workspaceRoot); err != nil {
+		return err
+	}
+
+	tasks, err := LoadTasks(workspaceRoot)
+	if err != nil {
+		return err
+	}
+	idx := findTaskIndex(tasks, taskID)
+	if idx == -1 {
+		return fmt.Errorf("task %s not found", taskID)
+	}
+	if tasks[idx].Status != StatusRunning {
+		return fmt.Errorf("task %s must be RUNNING to mark implemented (current: %s)", taskID, tasks[idx].Status)
+	}
+	if err := tasks[idx].TransitionTo(StatusImplemented); err != nil {
+		return err
+	}
+	if err := SaveTasks(workspaceRoot, tasks); err != nil {
+		return err
+	}
+	if err := AppendTaskSummary(workspaceRoot, tasks[idx], "task_implemented", "task moved to IMPLEMENTED"); err != nil {
+		return err
+	}
+	_ = SyncWorkflowFromTasks(workspaceRoot)
+	return nil
+}
+
+func BuildImplementTaskCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "implement <task-id>",
+		Short: "Mark a running task as IMPLEMENTED after code changes",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workspaceRoot, err := ResolveWorkspaceRoot()
+			if err != nil {
+				return err
+			}
+			if err := ImplementTask(workspaceRoot, args[0]); err != nil {
+				return err
+			}
+			fmt.Printf("task %s is now IMPLEMENTED\n", args[0])
 			return nil
 		},
 	}
@@ -217,6 +289,11 @@ func BuildCompleteTaskCommand() *cobra.Command {
 			if err := SaveTasks(workspaceRoot, tasks); err != nil {
 				return err
 			}
+			tasks, unlocked, _ := PromoteTasksAfterCompletion(workspaceRoot, tasks)
+			if len(unlocked) > 0 {
+				_ = SaveTasks(workspaceRoot, tasks)
+			}
+			_ = SyncWorkflowFromTasks(workspaceRoot)
 			if err := AppendTaskSummary(workspaceRoot, tasks[idx], "task_completed", "task moved to DONE"); err != nil {
 				return err
 			}
@@ -224,6 +301,73 @@ func BuildCompleteTaskCommand() *cobra.Command {
 			return nil
 		},
 	}
+	return cmd
+}
+
+func BuildTaskExplainCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "explain <task-id>",
+		Short: "Explain why a task is or is not ready",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workspaceRoot, err := ResolveWorkspaceRoot()
+			if err != nil {
+				return err
+			}
+			result, err := ExplainTask(workspaceRoot, args[0])
+			if err != nil {
+				return err
+			}
+			jsonFlag, _ := cmd.Flags().GetBool("json")
+			if jsonFlag {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(result)
+			}
+			fmt.Printf("task: %s\n", result.Task)
+			fmt.Printf("status: %s\n", result.Status)
+			fmt.Printf("ready: %t\n", result.Ready)
+			for _, reason := range result.BlockingReasons {
+				fmt.Printf("blocking: %s\n", reason)
+			}
+			fmt.Printf("suggested: %s\n", result.SuggestedNextCommand)
+			return nil
+		},
+	}
+	cmd.Flags().Bool("json", false, "Emit explanation as JSON")
+	return cmd
+}
+
+func BuildTaskValidateCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "validate",
+		Short: "Validate tasks.json syntax and schema without writing",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workspaceRoot, err := ResolveWorkspaceRoot()
+			if err != nil {
+				return err
+			}
+			result, err := LoadTasksWithReport(workspaceRoot)
+			if err != nil {
+				return err
+			}
+			jsonFlag, _ := cmd.Flags().GetBool("json")
+			if jsonFlag {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(result.Report)
+			}
+			fmt.Printf("valid: %t\n", result.Report.Valid)
+			for _, e := range result.Report.Errors {
+				fmt.Printf("- %s\n", e.Message)
+			}
+			if !result.Report.Valid {
+				return fmt.Errorf("tasks.json validation failed")
+			}
+			return nil
+		},
+	}
+	cmd.Flags().Bool("json", false, "Emit validation report as JSON")
 	return cmd
 }
 
@@ -323,4 +467,32 @@ func findTaskIndex(tasks []Task, taskID string) int {
 		}
 	}
 	return -1
+}
+
+func BuildTaskPreviewCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "preview",
+		Short: "Preview the current tasks.json plan for review",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workspaceRoot, err := ResolveWorkspaceRoot()
+			if err != nil {
+				return err
+			}
+			jsonFlag, _ := cmd.Flags().GetBool("json")
+			payload, doc, report, err := PreviewTaskPlan(workspaceRoot)
+			if err != nil {
+				return err
+			}
+			if jsonFlag {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(payload)
+			}
+			ws, _ := LoadWorkflowState(workspaceRoot)
+			fmt.Print(RenderTasksReviewText(workspaceRoot, ws, payload.TaskItems, doc, report))
+			return nil
+		},
+	}
+	cmd.Flags().Bool("json", false, "Emit preview as JSON")
+	return cmd
 }

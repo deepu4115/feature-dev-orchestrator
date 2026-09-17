@@ -13,7 +13,7 @@ func TestInitWorkspaceCreatesRequiredDirectories(t *testing.T) {
 		t.Fatalf("InitWorkspace returned error: %v", err)
 	}
 
-	for _, dir := range []string{".feature", ".feature/state", ".feature/context", ".feature/artifacts", ".feature/reviews", ".feature/logs"} {
+	for _, dir := range []string{".feature", ".feature/state", ".feature/context", ".feature/artifacts", ".feature/reviews", ".feature/logs", ".feature/plans"} {
 		if _, err := os.Stat(filepath.Join(workspaceRoot, dir)); err != nil {
 			t.Fatalf("expected directory %s to exist: %v", dir, err)
 		}
@@ -29,6 +29,23 @@ func TestInitWorkspaceCreatesRequiredDirectories(t *testing.T) {
 
 	if _, err := os.Stat(DefaultWorkflowPath(workspaceRoot)); err != nil {
 		t.Fatalf("expected workflow file to exist: %v", err)
+	}
+
+	if _, err := os.Stat(DefaultWorkflowStatePath(workspaceRoot)); err != nil {
+		t.Fatalf("expected workflow.json to exist: %v", err)
+	}
+}
+
+func TestInitCreatesPlansAndWorkflowJSON(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	if err := InitWorkspace(workspaceRoot); err != nil {
+		t.Fatalf("InitWorkspace returned error: %v", err)
+	}
+	if _, err := os.Stat(PlansDir(workspaceRoot)); err != nil {
+		t.Fatalf("expected plans dir: %v", err)
+	}
+	if _, err := os.Stat(DefaultWorkflowStatePath(workspaceRoot)); err != nil {
+		t.Fatalf("expected workflow.json: %v", err)
 	}
 }
 

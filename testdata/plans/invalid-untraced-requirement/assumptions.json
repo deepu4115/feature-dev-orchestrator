@@ -1,0 +1,10 @@
+{
+  "assumptions": [
+    {
+      "id": "A001",
+      "statement": "repo-a owns API",
+      "confidence": "HIGH",
+      "impact": "MEDIUM"
+    }
+  ]
+}

@@ -1,9 +1,7 @@
 package orchestrator
 
 import (
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -153,14 +151,103 @@ func TestExecuteNextVerificationFailureReturnsStructuredOutcome(t *testing.T) {
 	}
 }
 
-func initGitRepo(repoPath string) error {
-	if err := os.MkdirAll(repoPath, 0o755); err != nil {
-		return err
+func TestExecuteNext_LegacyBypassStillStarts(t *testing.T) {
+	workspaceRoot := setupTestWorkspace(t)
+	tasks := []Task{{ID: "T001", Title: "A", Repository: "repo-a", Status: StatusPlanned}}
+	if err := SaveTasks(workspaceRoot, tasks); err != nil {
+		t.Fatalf("SaveTasks: %v", err)
 	}
-	cmd := exec.Command("git", "init")
-	cmd.Dir = repoPath
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git init failed: %w: %s", err, string(out))
+	result, err := ExecuteNext(workspaceRoot, ExecuteNextOptions{ContextLevel: "brief"})
+	if err != nil {
+		t.Fatalf("ExecuteNext: %v", err)
 	}
-	return nil
+	if result.Action != "start" {
+		t.Fatalf("expected start, got %s", result.Action)
+	}
+}
+
+func TestExecuteNext_DeniedBeforeApproval(t *testing.T) {
+	workspaceRoot := setupTestWorkspace(t)
+	submitFixturePlan(t, workspaceRoot, "valid-minimal")
+	tasks := []Task{{ID: "T001", Title: "A", Repository: "repo-a", Status: StatusReviewPending}}
+	_ = SaveTasks(workspaceRoot, tasks)
+	_, err := ExecuteNext(workspaceRoot, ExecuteNextOptions{})
+	if err == nil {
+		t.Fatal("expected plan not approved error")
+	}
+	loaded, _ := LoadTasks(workspaceRoot)
+	if loaded[0].Status == StatusRunning {
+		t.Fatal("task should not be RUNNING")
+	}
+}
+
+func TestExecuteNext_StartsAfterApproval(t *testing.T) {
+	workspaceRoot := setupTestWorkspace(t)
+	submitFixturePlan(t, workspaceRoot, "valid-minimal")
+	if _, _, _, err := ApprovePlan(workspaceRoot, ApprovePlanOptions{}); err != nil {
+		t.Fatalf("ApprovePlan: %v", err)
+	}
+	result, err := ExecuteNext(workspaceRoot, ExecuteNextOptions{ContextLevel: "brief"})
+	if err != nil {
+		t.Fatalf("ExecuteNext: %v", err)
+	}
+	if result.Action != "start" {
+		t.Fatalf("expected start, got %s", result.Action)
+	}
+}
+
+func TestExecuteNext_ContinuesAfterWorkflowExecuting(t *testing.T) {
+	workspaceRoot := setupTestWorkspace(t)
+	submitFixturePlan(t, workspaceRoot, "valid-minimal")
+	if _, _, _, err := ApprovePlan(workspaceRoot, ApprovePlanOptions{}); err != nil {
+		t.Fatalf("ApprovePlan: %v", err)
+	}
+
+	start, err := ExecuteNext(workspaceRoot, ExecuteNextOptions{ContextLevel: "brief"})
+	if err != nil {
+		t.Fatalf("ExecuteNext start: %v", err)
+	}
+	if start.Action != "start" || start.StatusAfter != StatusRunning {
+		t.Fatalf("expected start->RUNNING, got %#v", start)
+	}
+
+	ws, _ := LoadWorkflowState(workspaceRoot)
+	if ws.WorkflowStatus != WorkflowExecuting {
+		t.Fatalf("expected workflow EXECUTING, got %s", ws.WorkflowStatus)
+	}
+
+	if err := ImplementTask(workspaceRoot, start.TaskID); err != nil {
+		t.Fatalf("ImplementTask: %v", err)
+	}
+
+	repoPath := filepath.Join(workspaceRoot, "repo-a")
+	if err := os.WriteFile(filepath.Join(repoPath, "go.mod"), []byte("module repo-a\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "repo_test.go"), []byte("package main\n\nimport \"testing\"\n\nfunc TestPass(t *testing.T) {}\n"), 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	verify, err := ExecuteNext(workspaceRoot, ExecuteNextOptions{ContextLevel: "brief", Timeout: 30})
+	if err != nil {
+		t.Fatalf("ExecuteNext verify after EXECUTING: %v", err)
+	}
+	if verify.Action != "verify" {
+		t.Fatalf("expected verify action, got %s", verify.Action)
+	}
+	if verify.StatusAfter != StatusDone {
+		t.Fatalf("expected DONE, got %s", verify.StatusAfter)
+	}
+}
+
+func TestExecuteLoop_StoppedReasonPlanNotApproved(t *testing.T) {
+	workspaceRoot := setupTestWorkspace(t)
+	submitFixturePlan(t, workspaceRoot, "valid-minimal")
+	loop, err := ExecuteLoop(workspaceRoot, ExecuteLoopOptions{ExecuteNextOptions: ExecuteNextOptions{}})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if loop.StoppedReason != "plan_not_approved" {
+		t.Fatalf("expected plan_not_approved, got %s", loop.StoppedReason)
+	}
 }

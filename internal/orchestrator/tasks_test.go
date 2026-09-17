@@ -30,7 +30,7 @@ func TestReadyTasksUsesDependencyCompletion(t *testing.T) {
 		{ID: "T4", Title: "Still blocked", Repository: "workspace", Status: StatusPlanned, Dependencies: []string{"missing"}},
 	}
 
-	ready, err := ReadyTasks(tasks)
+	ready, err := ReadyTasks(t.TempDir(), tasks)
 	if err != nil {
 		t.Fatalf("ReadyTasks returned error: %v", err)
 	}

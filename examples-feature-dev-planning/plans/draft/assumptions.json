@@ -1,0 +1,41 @@
+{
+  "assumptions": [
+    {
+      "id": "A001",
+      "statement": "The existing Spring Security JWT flow and shared token validation library remain the canonical authentication mechanism for protected order and cart endpoints.",
+      "confidence": "HIGH",
+      "impact": "HIGH",
+      "evidence": [
+        "shared-token-validation-lib/src/main/java/com/rajugowda/jwt/validator/filters/JwtFailFastAuthFilter.java",
+        "user-service/src/main/java/com/example/user/security/SecurityConfig.java",
+        "order-service/src/main/java/com/example/order/security/SecurityConfig.java"
+      ],
+      "affected_tasks": ["T001", "T004"]
+    },
+    {
+      "id": "A002",
+      "statement": "The cart and order flows will stay within the existing service ownership model, with product availability checked through the product service and local persistence owned by order-service.",
+      "confidence": "HIGH",
+      "impact": "HIGH",
+      "evidence": [
+        "order-service/src/main/java/com/example/order/infrastructure/integration/ProductFeignClient.java",
+        "order-service/src/main/java/com/example/order/api/OrderController.java",
+        "product-service/src/main/java/com/example/product/api/controller/ProductController.java"
+      ],
+      "affected_tasks": ["T002", "T003"]
+    },
+    {
+      "id": "A003",
+      "statement": "Consul metadata-based discovery and external configuration remain the runtime source of truth for service base paths during the demo implementation.",
+      "confidence": "MEDIUM",
+      "impact": "MEDIUM",
+      "evidence": [
+        "api-gateway/src/main/java/com/example/api_gateway/ApiGatewayApplication.java",
+        "config-server/src/main/java/com/example/config/ConfigServerApplication.java",
+        "PLAN.md"
+      ],
+      "affected_tasks": ["T005"]
+    }
+  ]
+}
+

@@ -1,0 +1,52 @@
+{
+  "impact": [
+    {
+      "repository": "order-service",
+      "areas": [
+        "order-service/src/main/java/com/example/order/api",
+        "order-service/src/main/java/com/example/order/application",
+        "order-service/src/main/java/com/example/order/infrastructure",
+        "order-service/src/test/java"
+      ]
+    },
+    {
+      "repository": "product-service",
+      "areas": [
+        "product-service/src/main/java/com/example/product/api/controller",
+        "product-service/src/main/java/com/example/product/application/service",
+        "product-service/src/test/java"
+      ]
+    },
+    {
+      "repository": "user-service",
+      "areas": [
+        "user-service/src/main/java/com/example/user/api",
+        "user-service/src/main/java/com/example/user/application",
+        "user-service/src/main/java/com/example/user/security",
+        "user-service/src/test/java"
+      ]
+    },
+    {
+      "repository": "shared-token-validation-lib",
+      "areas": [
+        "shared-token-validation-lib/src/main/java/com/rajugowda/jwt/validator",
+        "shared-token-validation-lib/src/test/java"
+      ]
+    },
+    {
+      "repository": "api-gateway",
+      "areas": [
+        "api-gateway/src/main/java/com/example/api_gateway",
+        "api-gateway/src/main/resources"
+      ]
+    },
+    {
+      "repository": "config-server",
+      "areas": [
+        "config-server/src/main/java/com/example/config",
+        "config-server/src/main/resources"
+      ]
+    }
+  ]
+}
+

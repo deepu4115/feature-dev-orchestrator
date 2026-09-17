@@ -1,0 +1,12 @@
+{
+  "assumptions": [
+    {
+      "id": "A001",
+      "statement": "State an assumption the plan depends on",
+      "confidence": "HIGH",
+      "impact": "MEDIUM",
+      "evidence": ["path/to/evidence"],
+      "affected_tasks": ["T001"]
+    }
+  ]
+}

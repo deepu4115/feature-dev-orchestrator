@@ -1,0 +1,30 @@
+schema_version: "1.0"
+feature:
+  id: orphan-req
+  title: Orphan requirement test
+plan:
+  revision: 1
+repositories:
+  - id: repo-a
+    relevant: true
+requirements:
+  - id: R004
+    description: Uncovered requirement
+    tasks: []
+acceptance_criteria:
+  - id: AC001
+    implementation_tasks:
+      - T001
+    planned_verification:
+      - test
+tasks:
+  - id: T001
+    title: Task one
+    repository: repo-a
+    verification:
+      - command: go test ./...
+verification:
+  strategy: repository-aware
+  by_repository:
+    repo-a:
+      - test

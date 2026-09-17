@@ -1,0 +1,8 @@
+{
+  "impact": [
+    {
+      "repository": "repo-a",
+      "areas": ["module/path", "tests/path"]
+    }
+  ]
+}

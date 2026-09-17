@@ -68,7 +68,7 @@ func InitWorkspace(workspaceRoot string) error {
 	if err := EnsureDir(featureDir); err != nil {
 		return fmt.Errorf("create feature dir: %w", err)
 	}
-	for _, dir := range []string{"state", "context", "artifacts", "reviews", "logs", "tasks"} {
+	for _, dir := range []string{"state", "context", "artifacts", "reviews", "logs", "tasks", "plans", "plans/draft"} {
 		if err := EnsureDir(filepath.Join(featureDir, dir)); err != nil {
 			return fmt.Errorf("create %s dir: %w", dir, err)
 		}
@@ -110,6 +110,13 @@ func InitWorkspace(workspaceRoot string) error {
 		}
 		if err := WriteFileAtomically(workflowPath, data); err != nil {
 			return fmt.Errorf("write workflow: %w", err)
+		}
+	}
+
+	wsPath := DefaultWorkflowStatePath(workspaceRoot)
+	if !Exists(wsPath) {
+		if err := SaveWorkflowState(workspaceRoot, DefaultWorkflowState()); err != nil {
+			return fmt.Errorf("write workflow state: %w", err)
 		}
 	}
 

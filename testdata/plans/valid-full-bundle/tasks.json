@@ -1,0 +1,11 @@
+[
+  {
+    "id": "T001",
+    "title": "Add health endpoint",
+    "repository": "repo-a",
+    "requirement_ids": ["R001"],
+    "ownership_confidence": "HIGH",
+    "repository_rationale": "repo-a owns API",
+    "verification": [{"command": "go test ./..."}]
+  }
+]

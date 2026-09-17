@@ -65,22 +65,10 @@ func TestBuildAgentHintNoTasksDefined(t *testing.T) {
 }
 
 func TestBuildAgentHintReadyForOrchestration(t *testing.T) {
-	workspaceRoot := t.TempDir()
-	if err := InitWorkspace(workspaceRoot); err != nil {
-		t.Fatalf("InitWorkspace returned error: %v", err)
-	}
-
-	repoPath := filepath.Join(workspaceRoot, "repo-a")
-	if err := initGitRepo(repoPath); err != nil {
-		t.Fatalf("init repo: %v", err)
-	}
-	if err := SaveRepositories(workspaceRoot, []Repository{{ID: "repo-a", Path: "repo-a", GitRoot: "repo-a", Mode: "read_write"}}); err != nil {
-		t.Fatalf("SaveRepositories returned error: %v", err)
-	}
-
-	tasks := []Task{{ID: "T001", Title: "A", Repository: "repo-a", Status: StatusPlanned}}
-	if err := SaveTasks(workspaceRoot, tasks); err != nil {
-		t.Fatalf("SaveTasks returned error: %v", err)
+	workspaceRoot := setupTestWorkspace(t)
+	submitFixturePlan(t, workspaceRoot, "valid-minimal")
+	if _, _, _, err := ApprovePlan(workspaceRoot, ApprovePlanOptions{}); err != nil {
+		t.Fatalf("ApprovePlan returned error: %v", err)
 	}
 
 	hint, err := BuildAgentHint(workspaceRoot)
@@ -88,8 +76,8 @@ func TestBuildAgentHintReadyForOrchestration(t *testing.T) {
 		t.Fatalf("BuildAgentHint returned error: %v", err)
 	}
 
-	if hint.Reason != "ready_for_orchestration" {
-		t.Fatalf("expected ready_for_orchestration, got %s", hint.Reason)
+	if hint.Reason != "plan_approved_ready" {
+		t.Fatalf("expected plan_approved_ready, got %s", hint.Reason)
 	}
 	if hint.SuggestedNextCommand != "feature-dev reconcile && feature-dev execute-loop --json" {
 		t.Fatalf("unexpected next command: %s", hint.SuggestedNextCommand)

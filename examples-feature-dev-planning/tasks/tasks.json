@@ -1,0 +1,247 @@
+[
+  {
+    "id": "T001",
+    "title": "Define JWT identity and auth contract for cart/order endpoints",
+    "repository": "user-service",
+    "status": "REVIEW_PENDING",
+    "goal": "Establish the authenticated identity contract and authorization expectations before implementing cart and order behavior.",
+    "verification": [
+      {
+        "name": "compile",
+        "command": "cd user-service \u0026\u0026 mvn test -DskipTests=false"
+      },
+      {
+        "name": "security tests",
+        "command": "cd shared-token-validation-lib \u0026\u0026 mvn test -DskipTests=false"
+      }
+    ],
+    "repository_rationale": "The user and shared token library own the JWT validation and principal extraction used by protected cart and order operations.",
+    "ownership_confidence": "HIGH",
+    "requirement_ids": [
+      "R001",
+      "R008",
+      "R010"
+    ],
+    "planned_verification": [
+      "compile",
+      "security tests"
+    ],
+    "updated_at": "2026-09-17T07:59:46.944666Z"
+  },
+  {
+    "id": "T002",
+    "title": "Implement authenticated cart retrieval and total calculation",
+    "repository": "order-service",
+    "status": "REVIEW_PENDING",
+    "goal": "Add a cart view endpoint that returns current cart data, item-level product information, and a computed total for the authenticated user.",
+    "dependencies": [
+      "T001"
+    ],
+    "verification": [
+      {
+        "name": "order service tests",
+        "command": "cd order-service \u0026\u0026 mvn test -DskipTests=false"
+      }
+    ],
+    "repository_rationale": "Order service owns cart-item persistence and is the correct boundary for displaying cart state and totals to the current user.",
+    "ownership_confidence": "HIGH",
+    "requirement_ids": [
+      "R002",
+      "R007",
+      "R008"
+    ],
+    "planned_verification": [
+      "order service tests",
+      "cart endpoint smoke checks"
+    ],
+    "updated_at": "2026-09-17T07:59:46.944667Z"
+  },
+  {
+    "id": "T003",
+    "title": "Implement user-order history and authenticated order access",
+    "repository": "order-service",
+    "status": "REVIEW_PENDING",
+    "goal": "Expose an authenticated order-history endpoint and enforce that users only see their own orders.",
+    "dependencies": [
+      "T001",
+      "T002"
+    ],
+    "verification": [
+      {
+        "name": "order service tests",
+        "command": "cd order-service \u0026\u0026 mvn test -DskipTests=false"
+      }
+    ],
+    "repository_rationale": "Order service owns the order and order-item domain and should enforce user-scoped history and retrieval rules.",
+    "ownership_confidence": "HIGH",
+    "requirement_ids": [
+      "R003",
+      "R007",
+      "R008"
+    ],
+    "planned_verification": [
+      "order service tests",
+      "controller validation"
+    ],
+    "updated_at": "2026-09-17T07:59:46.944667Z"
+  },
+  {
+    "id": "T004",
+    "title": "Complete order creation with stock validation, persistence, and cart clearing",
+    "repository": "order-service",
+    "status": "REVIEW_PENDING",
+    "goal": "Finalize the purchase flow so it validates the user, cart, and stock, persists order items atomically, and removes only the purchased selections.",
+    "dependencies": [
+      "T002",
+      "T003"
+    ],
+    "verification": [
+      {
+        "name": "order service tests",
+        "command": "cd order-service \u0026\u0026 mvn test -DskipTests=false"
+      },
+      {
+        "name": "integration smoke flow",
+        "command": "cd order-service \u0026\u0026 mvn verify -DskipTests=false"
+      }
+    ],
+    "repository_rationale": "The order service orchestrates the cart-to-order flow and is responsible for validation, stock checks, persistence, and cart cleanup after success.",
+    "ownership_confidence": "HIGH",
+    "requirement_ids": [
+      "R004",
+      "R005",
+      "R006",
+      "R011"
+    ],
+    "planned_verification": [
+      "order service tests",
+      "integration smoke flow"
+    ],
+    "updated_at": "2026-09-17T07:59:46.944667Z"
+  },
+  {
+    "id": "T005",
+    "title": "Align product stock and downstream integration behavior for purchase flow",
+    "repository": "product-service",
+    "status": "REVIEW_PENDING",
+    "goal": "Ensure product availability checks, stock updates, and error semantics support a consistent order-purchase flow.",
+    "dependencies": [
+      "T001"
+    ],
+    "verification": [
+      {
+        "name": "product service tests",
+        "command": "cd product-service \u0026\u0026 mvn test -DskipTests=false"
+      }
+    ],
+    "repository_rationale": "Product service owns product stock, product CRUD, and availability checks needed for order validation and reservation decisions.",
+    "ownership_confidence": "HIGH",
+    "requirement_ids": [
+      "R004",
+      "R005",
+      "R011"
+    ],
+    "planned_verification": [
+      "product service tests",
+      "availability checks"
+    ],
+    "updated_at": "2026-09-17T07:59:46.944667Z"
+  },
+  {
+    "id": "T006",
+    "title": "Standardize validation, error handling, and authorization across services",
+    "repository": "shared-token-validation-lib",
+    "status": "REVIEW_PENDING",
+    "goal": "Add consistent validation, global exception mapping, and authorization enforcement across the microservice APIs.",
+    "dependencies": [
+      "T001",
+      "T002",
+      "T003",
+      "T004",
+      "T005"
+    ],
+    "verification": [
+      {
+        "name": "shared lib tests",
+        "command": "cd shared-token-validation-lib \u0026\u0026 mvn test -DskipTests=false"
+      }
+    ],
+    "repository_rationale": "The shared validation library and the service exception layers define the common auth and validation patterns used by all protected APIs.",
+    "ownership_confidence": "HIGH",
+    "requirement_ids": [
+      "R007",
+      "R008",
+      "R009"
+    ],
+    "planned_verification": [
+      "compile",
+      "shared lib tests"
+    ],
+    "updated_at": "2026-09-17T07:59:46.944667Z"
+  },
+  {
+    "id": "T007",
+    "title": "Document runtime dependencies and gateway routing contract",
+    "repository": "api-gateway",
+    "status": "REVIEW_PENDING",
+    "goal": "Make gateway route behavior and required external config explicit and testable for local or demo deployments.",
+    "dependencies": [
+      "T001"
+    ],
+    "verification": [
+      {
+        "name": "gateway smoke check",
+        "command": "cd api-gateway \u0026\u0026 mvn test -DskipTests=false"
+      },
+      {
+        "name": "config server check",
+        "command": "cd config-server \u0026\u0026 mvn test -DskipTests=false"
+      }
+    ],
+    "repository_rationale": "The API gateway owns route discovery and request exposure from Consul metadata and therefore defines the user-facing contract for the demo flow.",
+    "ownership_confidence": "HIGH",
+    "requirement_ids": [
+      "R009",
+      "R010"
+    ],
+    "planned_verification": [
+      "gateway smoke check",
+      "config validation"
+    ],
+    "updated_at": "2026-09-17T07:59:46.944667Z"
+  },
+  {
+    "id": "T008",
+    "title": "Add purchase-flow and business-rule test coverage",
+    "repository": "order-service",
+    "status": "REVIEW_PENDING",
+    "goal": "Verify the end-to-end purchase flow, empty-cart rejection, stock issues, and persistence semantics through tests.",
+    "dependencies": [
+      "T004",
+      "T005",
+      "T006"
+    ],
+    "verification": [
+      {
+        "name": "test suite",
+        "command": "cd order-service \u0026\u0026 mvn test -DskipTests=false"
+      },
+      {
+        "name": "smoke flow",
+        "command": "cd product-service \u0026\u0026 mvn test -DskipTests=false \u0026\u0026 cd ../order-service \u0026\u0026 mvn test -DskipTests=false"
+      }
+    ],
+    "repository_rationale": "The order service is the best owner for the purchase flow, transaction, and cart logic tests exercising the end-to-end behavior.",
+    "ownership_confidence": "HIGH",
+    "requirement_ids": [
+      "R011",
+      "R004",
+      "R006"
+    ],
+    "planned_verification": [
+      "test suite",
+      "smoke flow"
+    ],
+    "updated_at": "2026-09-17T07:59:46.944667Z"
+  }
+]
