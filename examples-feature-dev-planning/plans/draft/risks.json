@@ -1,0 +1,48 @@
+{
+  "risks": [
+    {
+      "id": "RK001",
+      "type": "CROSS_REPOSITORY",
+      "level": "HIGH",
+      "description": "Order creation depends on product availability and cart state across service boundaries, so inconsistent stock or cart updates can create purchase inconsistencies.",
+      "mitigation": [
+        "Use a synchronous reservation and rollback strategy for the demo scope.",
+        "Verify stock availability before committing order items and clear only purchased entries after success.",
+        "Add targeted tests for empty cart, unavailable stock, and partial failures."
+      ]
+    },
+    {
+      "id": "RK002",
+      "type": "SECURITY",
+      "level": "HIGH",
+      "description": "The current API surfaces accept arbitrary usernames and generic exception handling, making authorization and identity enforcement brittle.",
+      "mitigation": [
+        "Derive user identity from validated JWT claims and restrict access by current authenticated principal.",
+        "Replace generic exceptions with domain exceptions mapped through global handlers.",
+        "Add role and ownership checks around cart and order operations."
+      ]
+    },
+    {
+      "id": "RK003",
+      "type": "DATA_INTEGRITY",
+      "level": "MEDIUM",
+      "description": "Order items may not be persisted reliably because save operations are commented or transaction boundaries are incomplete.",
+      "mitigation": [
+        "Verify the order-item persistence path and add an explicit transactional boundary around local order creation.",
+        "Test the cart-to-order conversion and persistence flow end-to-end."
+      ]
+    },
+    {
+      "id": "RK004",
+      "type": "OPS",
+      "level": "MEDIUM",
+      "description": "Gateway behavior and external configuration are runtime-dependent on Consul and Config Server, which can fail or be misconfigured in local/demo environments.",
+      "mitigation": [
+        "Document required keys and service dependencies from the active config repository.",
+        "Add startup and readiness checks for the relevant external services.",
+        "Keep route metadata and auth contracts explicit and testable."
+      ]
+    }
+  ]
+}
+

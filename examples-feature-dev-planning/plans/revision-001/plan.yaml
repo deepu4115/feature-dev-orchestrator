@@ -1,0 +1,350 @@
+schema_version: "1.0"
+feature:
+    id: feature
+    title: Feature implementation plan
+plan:
+    revision: 1
+    status: REVIEW_PENDING
+    generated_at: 2026-09-17T07:59:46.456665Z
+    fingerprint: sha256:f244ced60388359c16de936b8f585a443085a776b9e28fbf6ec8f44ef5a05c67
+repositories:
+    - id: user-service
+      relevant: true
+    - id: order-service
+      relevant: true
+    - id: product-service
+      relevant: true
+    - id: shared-token-validation-lib
+      relevant: true
+    - id: api-gateway
+      relevant: true
+requirements:
+    - id: R001
+      description: Authenticated cart and order operations must derive identity from validated JWT claims instead of accepting arbitrary usernames or user ids.
+      tasks:
+        - T001
+    - id: R002
+      description: Authenticated users must be able to fetch the current cart, including cart items, product display data, and a computed total.
+      tasks:
+        - T002
+    - id: R003
+      description: Users must be able to retrieve only their own order history; order access must be scoped to the current authenticated user.
+      tasks:
+        - T003
+    - id: R004
+      description: Order creation must validate the cart, load products, reject empty carts, reserve or decrement stock, persist order items, and clear only the purchased entries after success.
+      tasks:
+        - T004
+        - T005
+        - T008
+    - id: R005
+      description: The system must define and document a partial-stock failure strategy for synchronous reservation and rollback behavior in the demo scope.
+      tasks:
+        - T004
+        - T005
+    - id: R006
+      description: Order and cart persistence must be transaction-safe, with reliable order item persistence and a clear local transaction boundary.
+      tasks:
+        - T004
+        - T008
+    - id: R007
+      description: Standardized HTTP status codes and error payloads must be implemented across the business services to replace generic exception behavior.
+      tasks:
+        - T002
+        - T003
+        - T006
+    - id: R008
+      description: Input validation and authorization enforcement must be added for product mutation, user mutation, cart operations, and order status transitions using Bean Validation and role/ownership checks.
+      tasks:
+        - T001
+        - T002
+        - T003
+        - T006
+    - id: R009
+      description: Gateway routing and authentication metadata must be explicit and consistent with the Consul basePath contract, including route discovery and auth behavior.
+      tasks:
+        - T006
+        - T007
+    - id: R010
+      description: Required external configuration and runtime dependencies must be documented and validated without exposing secret values.
+      tasks:
+        - T001
+        - T007
+    - id: R011
+      description: The demo must include focused tests for cart logic, order creation, authentication, and an end-to-end purchase flow covering persistence and cart clearing.
+      tasks:
+        - T004
+        - T005
+        - T008
+acceptance_criteria:
+    - id: AC001
+      description: Define JWT identity and auth contract for cart/order endpoints
+      implementation_tasks:
+        - T001
+      planned_verification:
+        - compile
+        - security tests
+    - id: AC002
+      description: Implement authenticated cart retrieval and total calculation
+      implementation_tasks:
+        - T002
+      planned_verification:
+        - order service tests
+        - cart endpoint smoke checks
+    - id: AC003
+      description: Implement user-order history and authenticated order access
+      implementation_tasks:
+        - T003
+      planned_verification:
+        - order service tests
+        - controller validation
+    - id: AC004
+      description: Complete order creation with stock validation, persistence, and cart clearing
+      implementation_tasks:
+        - T004
+      planned_verification:
+        - order service tests
+        - integration smoke flow
+    - id: AC005
+      description: Align product stock and downstream integration behavior for purchase flow
+      implementation_tasks:
+        - T005
+      planned_verification:
+        - product service tests
+        - availability checks
+    - id: AC006
+      description: Standardize validation, error handling, and authorization across services
+      implementation_tasks:
+        - T006
+      planned_verification:
+        - compile
+        - shared lib tests
+    - id: AC007
+      description: Document runtime dependencies and gateway routing contract
+      implementation_tasks:
+        - T007
+      planned_verification:
+        - gateway smoke check
+        - config validation
+    - id: AC008
+      description: Add purchase-flow and business-rule test coverage
+      implementation_tasks:
+        - T008
+      planned_verification:
+        - test suite
+        - smoke flow
+tasks:
+    - id: T001
+      title: Define JWT identity and auth contract for cart/order endpoints
+      repository: user-service
+      goal: Establish the authenticated identity contract and authorization expectations before implementing cart and order behavior.
+      verification:
+        - name: compile
+          command: cd user-service && mvn test -DskipTests=false
+        - name: security tests
+          command: cd shared-token-validation-lib && mvn test -DskipTests=false
+    - id: T002
+      title: Implement authenticated cart retrieval and total calculation
+      repository: order-service
+      goal: Add a cart view endpoint that returns current cart data, item-level product information, and a computed total for the authenticated user.
+      dependencies:
+        - T001
+      verification:
+        - name: order service tests
+          command: cd order-service && mvn test -DskipTests=false
+    - id: T003
+      title: Implement user-order history and authenticated order access
+      repository: order-service
+      goal: Expose an authenticated order-history endpoint and enforce that users only see their own orders.
+      dependencies:
+        - T001
+        - T002
+      verification:
+        - name: order service tests
+          command: cd order-service && mvn test -DskipTests=false
+    - id: T004
+      title: Complete order creation with stock validation, persistence, and cart clearing
+      repository: order-service
+      goal: Finalize the purchase flow so it validates the user, cart, and stock, persists order items atomically, and removes only the purchased selections.
+      dependencies:
+        - T002
+        - T003
+      verification:
+        - name: order service tests
+          command: cd order-service && mvn test -DskipTests=false
+        - name: integration smoke flow
+          command: cd order-service && mvn verify -DskipTests=false
+    - id: T005
+      title: Align product stock and downstream integration behavior for purchase flow
+      repository: product-service
+      goal: Ensure product availability checks, stock updates, and error semantics support a consistent order-purchase flow.
+      dependencies:
+        - T001
+      verification:
+        - name: product service tests
+          command: cd product-service && mvn test -DskipTests=false
+    - id: T006
+      title: Standardize validation, error handling, and authorization across services
+      repository: shared-token-validation-lib
+      goal: Add consistent validation, global exception mapping, and authorization enforcement across the microservice APIs.
+      dependencies:
+        - T001
+        - T002
+        - T003
+        - T004
+        - T005
+      verification:
+        - name: shared lib tests
+          command: cd shared-token-validation-lib && mvn test -DskipTests=false
+    - id: T007
+      title: Document runtime dependencies and gateway routing contract
+      repository: api-gateway
+      goal: Make gateway route behavior and required external config explicit and testable for local or demo deployments.
+      dependencies:
+        - T001
+      verification:
+        - name: gateway smoke check
+          command: cd api-gateway && mvn test -DskipTests=false
+        - name: config server check
+          command: cd config-server && mvn test -DskipTests=false
+    - id: T008
+      title: Add purchase-flow and business-rule test coverage
+      repository: order-service
+      goal: Verify the end-to-end purchase flow, empty-cart rejection, stock issues, and persistence semantics through tests.
+      dependencies:
+        - T004
+        - T005
+        - T006
+      verification:
+        - name: test suite
+          command: cd order-service && mvn test -DskipTests=false
+        - name: smoke flow
+          command: cd product-service && mvn test -DskipTests=false && cd ../order-service && mvn test -DskipTests=false
+assumptions:
+    - id: A001
+      statement: The existing Spring Security JWT flow and shared token validation library remain the canonical authentication mechanism for protected order and cart endpoints.
+      confidence: HIGH
+      impact: HIGH
+      evidence:
+        - shared-token-validation-lib/src/main/java/com/rajugowda/jwt/validator/filters/JwtFailFastAuthFilter.java
+        - user-service/src/main/java/com/example/user/security/SecurityConfig.java
+        - order-service/src/main/java/com/example/order/security/SecurityConfig.java
+      affected_tasks:
+        - T001
+        - T004
+    - id: A002
+      statement: The cart and order flows will stay within the existing service ownership model, with product availability checked through the product service and local persistence owned by order-service.
+      confidence: HIGH
+      impact: HIGH
+      evidence:
+        - order-service/src/main/java/com/example/order/infrastructure/integration/ProductFeignClient.java
+        - order-service/src/main/java/com/example/order/api/OrderController.java
+        - product-service/src/main/java/com/example/product/api/controller/ProductController.java
+      affected_tasks:
+        - T002
+        - T003
+    - id: A003
+      statement: Consul metadata-based discovery and external configuration remain the runtime source of truth for service base paths during the demo implementation.
+      confidence: MEDIUM
+      impact: MEDIUM
+      evidence:
+        - api-gateway/src/main/java/com/example/api_gateway/ApiGatewayApplication.java
+        - config-server/src/main/java/com/example/config/ConfigServerApplication.java
+        - PLAN.md
+      affected_tasks:
+        - T005
+risks:
+    - id: RK001
+      type: CROSS_REPOSITORY
+      level: HIGH
+      description: Order creation depends on product availability and cart state across service boundaries, so inconsistent stock or cart updates can create purchase inconsistencies.
+      mitigation:
+        - Use a synchronous reservation and rollback strategy for the demo scope.
+        - Verify stock availability before committing order items and clear only purchased entries after success.
+        - Add targeted tests for empty cart, unavailable stock, and partial failures.
+    - id: RK002
+      type: SECURITY
+      level: HIGH
+      description: The current API surfaces accept arbitrary usernames and generic exception handling, making authorization and identity enforcement brittle.
+      mitigation:
+        - Derive user identity from validated JWT claims and restrict access by current authenticated principal.
+        - Replace generic exceptions with domain exceptions mapped through global handlers.
+        - Add role and ownership checks around cart and order operations.
+    - id: RK003
+      type: DATA_INTEGRITY
+      level: MEDIUM
+      description: Order items may not be persisted reliably because save operations are commented or transaction boundaries are incomplete.
+      mitigation:
+        - Verify the order-item persistence path and add an explicit transactional boundary around local order creation.
+        - Test the cart-to-order conversion and persistence flow end-to-end.
+    - id: RK004
+      type: OPS
+      level: MEDIUM
+      description: Gateway behavior and external configuration are runtime-dependent on Consul and Config Server, which can fail or be misconfigured in local/demo environments.
+      mitigation:
+        - Document required keys and service dependencies from the active config repository.
+        - Add startup and readiness checks for the relevant external services.
+        - Keep route metadata and auth contracts explicit and testable.
+verification:
+    strategy: repository-aware
+    by_repository:
+        api-gateway:
+            - cd api-gateway && mvn test -DskipTests=false
+            - cd config-server && mvn test -DskipTests=false
+        order-service:
+            - cd order-service && mvn test -DskipTests=false
+            - cd product-service && mvn test -DskipTests=false && cd ../order-service && mvn test -DskipTests=false
+        product-service:
+            - cd product-service && mvn test -DskipTests=false
+        shared-token-validation-lib:
+            - cd shared-token-validation-lib && mvn test -DskipTests=false
+        user-service:
+            - cd user-service && mvn test -DskipTests=false
+            - cd shared-token-validation-lib && mvn test -DskipTests=false
+expected_change_areas:
+    api-gateway:
+        - api-gateway/src/main/java/com/example/api_gateway
+        - api-gateway/src/main/resources
+    config-server:
+        - config-server/src/main/java/com/example/config
+        - config-server/src/main/resources
+    order-service:
+        - order-service/src/main/java/com/example/order/api
+        - order-service/src/main/java/com/example/order/application
+        - order-service/src/main/java/com/example/order/infrastructure
+        - order-service/src/test/java
+    product-service:
+        - product-service/src/main/java/com/example/product/api/controller
+        - product-service/src/main/java/com/example/product/application/service
+        - product-service/src/test/java
+    shared-token-validation-lib:
+        - shared-token-validation-lib/src/main/java/com/rajugowda/jwt/validator
+        - shared-token-validation-lib/src/test/java
+    user-service:
+        - user-service/src/main/java/com/example/user/api
+        - user-service/src/main/java/com/example/user/application
+        - user-service/src/main/java/com/example/user/security
+        - user-service/src/test/java
+plan_snapshot:
+    repositories:
+        api-gateway:
+            branch: deepak-ecommerce-enhance
+            head: 7fbe5f320c43b814895a1f1ac8c739b48d498c4e
+        config-server:
+            branch: deepak-ecommerce-enhance
+            head: 1aef67f9309ebde3dae65877147633d7d95bc4f8
+        order-service:
+            branch: deepak-ecommerce-enhance
+            head: 15f53308a937d372894d44e85076a4a5c5101c8c
+        product-service:
+            branch: deepak-ecommerce-enhance
+            head: 1922878f46515ecfcfde0122279dbb3e1a9ee329
+        shared-token-validation-lib:
+            branch: deepak-ecommerce-enhance
+            head: dff6b033425efd5581530a4e39a1d474feb6c091
+        user-service:
+            branch: deepak-ecommerce-enhance
+            head: eb3552903dd772c031f552419e5a85cb6d9b8cc6
+approval:
+    required: true
+    approved_revision: null

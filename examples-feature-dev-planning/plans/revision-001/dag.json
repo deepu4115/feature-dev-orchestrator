@@ -1,0 +1,207 @@
+{
+  "edges": [
+    {
+      "from": "T001",
+      "to": "T002"
+    },
+    {
+      "from": "T001",
+      "to": "T003"
+    },
+    {
+      "from": "T002",
+      "to": "T003"
+    },
+    {
+      "from": "T002",
+      "to": "T004"
+    },
+    {
+      "from": "T003",
+      "to": "T004"
+    },
+    {
+      "from": "T001",
+      "to": "T005"
+    },
+    {
+      "from": "T001",
+      "to": "T006"
+    },
+    {
+      "from": "T002",
+      "to": "T006"
+    },
+    {
+      "from": "T003",
+      "to": "T006"
+    },
+    {
+      "from": "T004",
+      "to": "T006"
+    },
+    {
+      "from": "T005",
+      "to": "T006"
+    },
+    {
+      "from": "T001",
+      "to": "T007"
+    },
+    {
+      "from": "T004",
+      "to": "T008"
+    },
+    {
+      "from": "T005",
+      "to": "T008"
+    },
+    {
+      "from": "T006",
+      "to": "T008"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "T001",
+      "title": "Define JWT identity and auth contract for cart/order endpoints",
+      "repository": "user-service",
+      "goal": "Establish the authenticated identity contract and authorization expectations before implementing cart and order behavior.",
+      "verification": [
+        {
+          "name": "compile",
+          "command": "cd user-service \u0026\u0026 mvn test -DskipTests=false"
+        },
+        {
+          "name": "security tests",
+          "command": "cd shared-token-validation-lib \u0026\u0026 mvn test -DskipTests=false"
+        }
+      ]
+    },
+    {
+      "id": "T002",
+      "title": "Implement authenticated cart retrieval and total calculation",
+      "repository": "order-service",
+      "goal": "Add a cart view endpoint that returns current cart data, item-level product information, and a computed total for the authenticated user.",
+      "dependencies": [
+        "T001"
+      ],
+      "verification": [
+        {
+          "name": "order service tests",
+          "command": "cd order-service \u0026\u0026 mvn test -DskipTests=false"
+        }
+      ]
+    },
+    {
+      "id": "T003",
+      "title": "Implement user-order history and authenticated order access",
+      "repository": "order-service",
+      "goal": "Expose an authenticated order-history endpoint and enforce that users only see their own orders.",
+      "dependencies": [
+        "T001",
+        "T002"
+      ],
+      "verification": [
+        {
+          "name": "order service tests",
+          "command": "cd order-service \u0026\u0026 mvn test -DskipTests=false"
+        }
+      ]
+    },
+    {
+      "id": "T004",
+      "title": "Complete order creation with stock validation, persistence, and cart clearing",
+      "repository": "order-service",
+      "goal": "Finalize the purchase flow so it validates the user, cart, and stock, persists order items atomically, and removes only the purchased selections.",
+      "dependencies": [
+        "T002",
+        "T003"
+      ],
+      "verification": [
+        {
+          "name": "order service tests",
+          "command": "cd order-service \u0026\u0026 mvn test -DskipTests=false"
+        },
+        {
+          "name": "integration smoke flow",
+          "command": "cd order-service \u0026\u0026 mvn verify -DskipTests=false"
+        }
+      ]
+    },
+    {
+      "id": "T005",
+      "title": "Align product stock and downstream integration behavior for purchase flow",
+      "repository": "product-service",
+      "goal": "Ensure product availability checks, stock updates, and error semantics support a consistent order-purchase flow.",
+      "dependencies": [
+        "T001"
+      ],
+      "verification": [
+        {
+          "name": "product service tests",
+          "command": "cd product-service \u0026\u0026 mvn test -DskipTests=false"
+        }
+      ]
+    },
+    {
+      "id": "T006",
+      "title": "Standardize validation, error handling, and authorization across services",
+      "repository": "shared-token-validation-lib",
+      "goal": "Add consistent validation, global exception mapping, and authorization enforcement across the microservice APIs.",
+      "dependencies": [
+        "T001",
+        "T002",
+        "T003",
+        "T004",
+        "T005"
+      ],
+      "verification": [
+        {
+          "name": "shared lib tests",
+          "command": "cd shared-token-validation-lib \u0026\u0026 mvn test -DskipTests=false"
+        }
+      ]
+    },
+    {
+      "id": "T007",
+      "title": "Document runtime dependencies and gateway routing contract",
+      "repository": "api-gateway",
+      "goal": "Make gateway route behavior and required external config explicit and testable for local or demo deployments.",
+      "dependencies": [
+        "T001"
+      ],
+      "verification": [
+        {
+          "name": "gateway smoke check",
+          "command": "cd api-gateway \u0026\u0026 mvn test -DskipTests=false"
+        },
+        {
+          "name": "config server check",
+          "command": "cd config-server \u0026\u0026 mvn test -DskipTests=false"
+        }
+      ]
+    },
+    {
+      "id": "T008",
+      "title": "Add purchase-flow and business-rule test coverage",
+      "repository": "order-service",
+      "goal": "Verify the end-to-end purchase flow, empty-cart rejection, stock issues, and persistence semantics through tests.",
+      "dependencies": [
+        "T004",
+        "T005",
+        "T006"
+      ],
+      "verification": [
+        {
+          "name": "test suite",
+          "command": "cd order-service \u0026\u0026 mvn test -DskipTests=false"
+        },
+        {
+          "name": "smoke flow",
+          "command": "cd product-service \u0026\u0026 mvn test -DskipTests=false \u0026\u0026 cd ../order-service \u0026\u0026 mvn test -DskipTests=false"
+        }
+      ]
+    }
+  ]
+}

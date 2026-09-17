@@ -1,0 +1,49 @@
+{
+  "requirements": [
+    {
+      "id": "R001",
+      "description": "Authenticated cart and order operations must derive identity from validated JWT claims instead of accepting arbitrary usernames or user ids."
+    },
+    {
+      "id": "R002",
+      "description": "Authenticated users must be able to fetch the current cart, including cart items, product display data, and a computed total."
+    },
+    {
+      "id": "R003",
+      "description": "Users must be able to retrieve only their own order history; order access must be scoped to the current authenticated user."
+    },
+    {
+      "id": "R004",
+      "description": "Order creation must validate the cart, load products, reject empty carts, reserve or decrement stock, persist order items, and clear only the purchased entries after success."
+    },
+    {
+      "id": "R005",
+      "description": "The system must define and document a partial-stock failure strategy for synchronous reservation and rollback behavior in the demo scope."
+    },
+    {
+      "id": "R006",
+      "description": "Order and cart persistence must be transaction-safe, with reliable order item persistence and a clear local transaction boundary."
+    },
+    {
+      "id": "R007",
+      "description": "Standardized HTTP status codes and error payloads must be implemented across the business services to replace generic exception behavior."
+    },
+    {
+      "id": "R008",
+      "description": "Input validation and authorization enforcement must be added for product mutation, user mutation, cart operations, and order status transitions using Bean Validation and role/ownership checks."
+    },
+    {
+      "id": "R009",
+      "description": "Gateway routing and authentication metadata must be explicit and consistent with the Consul basePath contract, including route discovery and auth behavior."
+    },
+    {
+      "id": "R010",
+      "description": "Required external configuration and runtime dependencies must be documented and validated without exposing secret values."
+    },
+    {
+      "id": "R011",
+      "description": "The demo must include focused tests for cart logic, order creation, authentication, and an end-to-end purchase flow covering persistence and cart clearing."
+    }
+  ]
+}
+

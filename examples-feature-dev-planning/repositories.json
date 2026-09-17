@@ -1,0 +1,38 @@
+[
+  {
+    "id": "api-gateway",
+    "path": "/Users/dekumar/Documents/code/Ecommerce-workspace/api-gateway",
+    "git_root": "/Users/dekumar/Documents/code/Ecommerce-workspace/api-gateway",
+    "mode": "auto"
+  },
+  {
+    "id": "config-server",
+    "path": "/Users/dekumar/Documents/code/Ecommerce-workspace/config-server",
+    "git_root": "/Users/dekumar/Documents/code/Ecommerce-workspace/config-server",
+    "mode": "auto"
+  },
+  {
+    "id": "order-service",
+    "path": "/Users/dekumar/Documents/code/Ecommerce-workspace/order-service",
+    "git_root": "/Users/dekumar/Documents/code/Ecommerce-workspace/order-service",
+    "mode": "auto"
+  },
+  {
+    "id": "product-service",
+    "path": "/Users/dekumar/Documents/code/Ecommerce-workspace/product-service",
+    "git_root": "/Users/dekumar/Documents/code/Ecommerce-workspace/product-service",
+    "mode": "auto"
+  },
+  {
+    "id": "shared-token-validation-lib",
+    "path": "/Users/dekumar/Documents/code/Ecommerce-workspace/shared-token-validation-lib",
+    "git_root": "/Users/dekumar/Documents/code/Ecommerce-workspace/shared-token-validation-lib",
+    "mode": "auto"
+  },
+  {
+    "id": "user-service",
+    "path": "/Users/dekumar/Documents/code/Ecommerce-workspace/user-service",
+    "git_root": "/Users/dekumar/Documents/code/Ecommerce-workspace/user-service",
+    "mode": "auto"
+  }
+]
