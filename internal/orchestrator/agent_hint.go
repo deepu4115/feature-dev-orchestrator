@@ -113,6 +113,12 @@ func BuildAgentHint(workspaceRoot string) (AgentHint, error) {
 			hint.SuggestedPrompt = "The plan is approved. Continue autonomous execute-loop cycles until all tasks are DONE."
 			return hint, nil
 		case WorkflowExecuting:
+			if len(hint.RunningTasks) > 0 {
+				hint.Reason = "task_awaiting_implementation"
+				hint.SuggestedNextCommand = fmt.Sprintf("feature-dev implement %s && feature-dev execute-loop --json", hint.RunningTasks[0])
+				hint.SuggestedPrompt = "Finish code changes for the RUNNING task, mark it IMPLEMENTED with feature-dev implement, then continue execute-loop."
+				return hint, nil
+			}
 			hint.Reason = "ready_for_orchestration"
 			hint.SuggestedNextCommand = "feature-dev execute-loop --json"
 			hint.SuggestedPrompt = "Implementation in progress. Continue execute-loop until all tasks are DONE."

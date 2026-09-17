@@ -196,6 +196,50 @@ func TestExecuteNext_StartsAfterApproval(t *testing.T) {
 	}
 }
 
+func TestExecuteNext_ContinuesAfterWorkflowExecuting(t *testing.T) {
+	workspaceRoot := setupTestWorkspace(t)
+	submitFixturePlan(t, workspaceRoot, "valid-minimal")
+	if _, _, _, err := ApprovePlan(workspaceRoot, ApprovePlanOptions{}); err != nil {
+		t.Fatalf("ApprovePlan: %v", err)
+	}
+
+	start, err := ExecuteNext(workspaceRoot, ExecuteNextOptions{ContextLevel: "brief"})
+	if err != nil {
+		t.Fatalf("ExecuteNext start: %v", err)
+	}
+	if start.Action != "start" || start.StatusAfter != StatusRunning {
+		t.Fatalf("expected start->RUNNING, got %#v", start)
+	}
+
+	ws, _ := LoadWorkflowState(workspaceRoot)
+	if ws.WorkflowStatus != WorkflowExecuting {
+		t.Fatalf("expected workflow EXECUTING, got %s", ws.WorkflowStatus)
+	}
+
+	if err := ImplementTask(workspaceRoot, start.TaskID); err != nil {
+		t.Fatalf("ImplementTask: %v", err)
+	}
+
+	repoPath := filepath.Join(workspaceRoot, "repo-a")
+	if err := os.WriteFile(filepath.Join(repoPath, "go.mod"), []byte("module repo-a\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "repo_test.go"), []byte("package main\n\nimport \"testing\"\n\nfunc TestPass(t *testing.T) {}\n"), 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	verify, err := ExecuteNext(workspaceRoot, ExecuteNextOptions{ContextLevel: "brief", Timeout: 30})
+	if err != nil {
+		t.Fatalf("ExecuteNext verify after EXECUTING: %v", err)
+	}
+	if verify.Action != "verify" {
+		t.Fatalf("expected verify action, got %s", verify.Action)
+	}
+	if verify.StatusAfter != StatusDone {
+		t.Fatalf("expected DONE, got %s", verify.StatusAfter)
+	}
+}
+
 func TestExecuteLoop_StoppedReasonPlanNotApproved(t *testing.T) {
 	workspaceRoot := setupTestWorkspace(t)
 	submitFixturePlan(t, workspaceRoot, "valid-minimal")

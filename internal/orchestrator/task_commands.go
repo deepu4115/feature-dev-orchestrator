@@ -19,6 +19,7 @@ func BuildTaskCommand() *cobra.Command {
 	cmd.AddCommand(BuildReadyTaskListCommand())
 	cmd.AddCommand(BuildTaskPreviewCommand())
 	cmd.AddCommand(BuildStartTaskCommand())
+	cmd.AddCommand(BuildImplementTaskCommand())
 	cmd.AddCommand(BuildCompleteTaskCommand())
 	cmd.AddCommand(BuildFailTaskCommand())
 	return cmd
@@ -192,6 +193,55 @@ func BuildStartTaskCommand() *cobra.Command {
 				return err
 			}
 			fmt.Printf("task %s is now RUNNING\n", args[0])
+			return nil
+		},
+	}
+	return cmd
+}
+
+func ImplementTask(workspaceRoot string, taskID string) error {
+	if err := CanExecute(workspaceRoot); err != nil {
+		return err
+	}
+
+	tasks, err := LoadTasks(workspaceRoot)
+	if err != nil {
+		return err
+	}
+	idx := findTaskIndex(tasks, taskID)
+	if idx == -1 {
+		return fmt.Errorf("task %s not found", taskID)
+	}
+	if tasks[idx].Status != StatusRunning {
+		return fmt.Errorf("task %s must be RUNNING to mark implemented (current: %s)", taskID, tasks[idx].Status)
+	}
+	if err := tasks[idx].TransitionTo(StatusImplemented); err != nil {
+		return err
+	}
+	if err := SaveTasks(workspaceRoot, tasks); err != nil {
+		return err
+	}
+	if err := AppendTaskSummary(workspaceRoot, tasks[idx], "task_implemented", "task moved to IMPLEMENTED"); err != nil {
+		return err
+	}
+	_ = SyncWorkflowFromTasks(workspaceRoot)
+	return nil
+}
+
+func BuildImplementTaskCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "implement <task-id>",
+		Short: "Mark a running task as IMPLEMENTED after code changes",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workspaceRoot, err := ResolveWorkspaceRoot()
+			if err != nil {
+				return err
+			}
+			if err := ImplementTask(workspaceRoot, args[0]); err != nil {
+				return err
+			}
+			fmt.Printf("task %s is now IMPLEMENTED\n", args[0])
 			return nil
 		},
 	}

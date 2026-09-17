@@ -93,6 +93,8 @@ Planning rules:
 | `tasks_awaiting_approval` | present review, wait for approval |
 | `plan_rejected` / `plan_replanning` | replan, revise, resubmit |
 | `plan_approved_ready` | reconcile + execute-loop |
+| `task_awaiting_implementation` | code in assigned repo, then `implement <task-id>` + execute-loop |
+| `ready_for_orchestration` | reconcile + execute-loop |
 | `awaiting_final_verification` | `finalize --json` |
 | `feature_completed` | summarize outcome |
 
@@ -101,20 +103,48 @@ Run:
 - `go run ./cmd/feature-dev reconcile`
 - `go run ./cmd/feature-dev execute-loop --json`
 
+#### Task status lifecycle (agent-driven via CLI)
+Each task moves through:
+
+`READY` → `RUNNING` → `IMPLEMENTED` → `VERIFYING` → `DONE`
+
+| Transition | Command | Who |
+|------------|---------|-----|
+| → `RUNNING` | `execute-loop` / `execute-next` / `task start` | CLI |
+| → `IMPLEMENTED` | `implement <task-id>` | **Agent** (after code changes) |
+| → `VERIFYING` → `DONE` | `execute-loop` / `execute-next` (on verify pass) | CLI |
+
+After coding, always run:
+
+```bash
+go run ./cmd/feature-dev implement <task-id>
+go run ./cmd/feature-dev execute-loop --json
+```
+
+Do not call `verify` on a `RUNNING` task — it requires `IMPLEMENTED` or `VERIFYING`.
+`execute-loop` verifies and marks `DONE` automatically when tests pass.
+
+#### Per-task execution cycle
+1. `execute-loop --json` starts the next ready task (`RUNNING`) or verifies an `IMPLEMENTED` task.
+2. If stop reason is `awaiting_code_changes`, edit code in the task's assigned repository only.
+3. Run `go run ./cmd/feature-dev implement <task-id>` to mark coding complete.
+4. Run `go run ./cmd/feature-dev execute-loop --json` again — verify on pass → `DONE`.
+5. Repeat until all tasks are `DONE`, then `finalize --json`.
+
 Execution rules:
 1. Confirm workflow status is `APPROVED`, `EXECUTING`, or `VERIFYING`.
 2. Do not run execute-loop while `CLARIFICATION_NEEDED` or `REVIEW_PENDING`.
 3. Implement only the assigned task in its assigned repository.
-4. Run verification and continue until all tasks are `DONE`.
+4. After code changes, run `implement <task-id>` before rerunning execute-loop.
 5. Run `go run ./cmd/feature-dev finalize --json` when all tasks are DONE (traceability + cross-repo verify → `COMPLETED`).
 6. If finalize fails, inspect the report, fix gaps, rerun finalize.
 
 Interpret stop reasons:
 - `plan_not_approved`: run review flow and obtain approval before coding.
-- `awaiting_code_changes`: implement active task, verify, rerun execute-loop.
+- `awaiting_code_changes`: edit code in assigned repo, run `implement <task-id>`, then rerun execute-loop.
 - `awaiting_final_verification`: run finalize.
 - `feature_completed`: summarize and stop.
-- `verify_failure_budget_reached`: inspect artifacts, fix, rerun loop.
+- `verify_failure_budget_reached`: inspect artifacts, fix code, run `implement <task-id>` if needed, rerun loop.
 - `no_executable_task`: inspect dependencies or run finalize if all tasks DONE.
 
 ### 4) Command-Driven Skill Routing
@@ -157,6 +187,8 @@ Show me the tasks.json task list, repo assignments, dependencies, assumptions, r
 and any validation warnings. Wait for my explicit approval before implementation.
 
 After I approve, run feature-dev approve and then execute-loop --json.
+When execute-loop stops with awaiting_code_changes, implement the task in its assigned
+repository, run feature-dev implement <task-id>, then rerun execute-loop --json.
 When all tasks are DONE, run feature-dev finalize --json.
 ```
 

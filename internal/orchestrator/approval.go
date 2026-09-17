@@ -7,11 +7,17 @@ import (
 	"time"
 )
 
+func isExecutionAllowedWorkflowStatus(status WorkflowStatus) bool {
+	return status == WorkflowApproved ||
+		status == WorkflowExecuting ||
+		status == WorkflowVerifying
+}
+
 func CanStartTask(ws WorkflowState, task Task) error {
 	if !RequiresPlanApproval(ws) {
 		return nil
 	}
-	if ws.WorkflowStatus != WorkflowApproved {
+	if !isExecutionAllowedWorkflowStatus(ws.WorkflowStatus) {
 		return fmt.Errorf("%w: status=%s revision=%d", ErrPlanNotApproved, ws.WorkflowStatus, ws.CurrentPlanRevision)
 	}
 	if ws.ApprovedPlanRevision == nil || *ws.ApprovedPlanRevision != ws.CurrentPlanRevision {
@@ -59,7 +65,7 @@ func CanExecute(workspaceRoot string) error {
 	if !RequiresPlanApproval(ws) {
 		return nil
 	}
-	if ws.WorkflowStatus != WorkflowApproved {
+	if !isExecutionAllowedWorkflowStatus(ws.WorkflowStatus) {
 		return fmt.Errorf("%w: status=%s revision=%d", ErrPlanNotApproved, ws.WorkflowStatus, ws.CurrentPlanRevision)
 	}
 	if ws.ApprovedPlanRevision == nil || *ws.ApprovedPlanRevision != ws.CurrentPlanRevision {

@@ -40,6 +40,32 @@ func TestCanStartTask_DeniedWhenApprovedRevisionStale(t *testing.T) {
 	}
 }
 
+func TestCanExecute_AllowedWhenExecuting(t *testing.T) {
+	workspaceRoot := setupTestWorkspace(t)
+	submitFixturePlan(t, workspaceRoot, "valid-minimal")
+	if _, _, _, err := ApprovePlan(workspaceRoot, ApprovePlanOptions{}); err != nil {
+		t.Fatalf("ApprovePlan: %v", err)
+	}
+	if _, err := ExecuteNext(workspaceRoot, ExecuteNextOptions{ContextLevel: "brief"}); err != nil {
+		t.Fatalf("ExecuteNext: %v", err)
+	}
+	if err := CanExecute(workspaceRoot); err != nil {
+		t.Fatalf("expected execution allowed while EXECUTING, got %v", err)
+	}
+}
+
+func TestCanStartTask_AllowedWhenExecuting(t *testing.T) {
+	rev := 1
+	ws := DefaultWorkflowState()
+	ws.CurrentPlanRevision = 1
+	ws.ApprovedPlanRevision = &rev
+	ws.WorkflowStatus = WorkflowExecuting
+	task := Task{ID: "T001", Status: StatusReady}
+	if err := CanStartTask(ws, task); err != nil {
+		t.Fatalf("expected allowed while EXECUTING, got %v", err)
+	}
+}
+
 func TestCanStartTask_AllowedAfterApprove(t *testing.T) {
 	rev := 1
 	ws := DefaultWorkflowState()
