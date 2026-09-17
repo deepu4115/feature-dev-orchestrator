@@ -107,10 +107,14 @@ func crossRepoCommands(workspaceRoot string, ws WorkflowState) []string {
 }
 
 type CrossRepoVerifyReport struct {
-	Valid    bool                  `json:"valid"`
-	Results  []VerificationResult  `json:"results,omitempty"`
-	Errors   []PlanValidationIssue `json:"errors,omitempty"`
-	Checks   map[string]string     `json:"checks"`
+	Valid               bool                  `json:"valid"`
+	Status              string                `json:"status"`
+	Reason              string                `json:"reason,omitempty"`
+	ResidualRisk        string                `json:"residual_risk,omitempty"`
+	RequiredDeclaration string                `json:"required_declaration,omitempty"`
+	Results             []VerificationResult  `json:"results,omitempty"`
+	Errors              []PlanValidationIssue `json:"errors,omitempty"`
+	Checks              map[string]string     `json:"checks"`
 }
 
 func RunCrossRepoVerification(workspaceRoot string, timeoutSeconds int) (CrossRepoVerifyReport, error) {
@@ -121,9 +125,22 @@ func RunCrossRepoVerification(workspaceRoot string, timeoutSeconds int) (CrossRe
 	}
 	cmds := crossRepoCommands(workspaceRoot, ws)
 	if len(cmds) == 0 {
+		report.Status = "SKIPPED"
+		report.Reason = "no workspace-level cross-repository verification commands configured"
+		report.ResidualRisk = "service-to-service integration behavior may not be exercised"
+		report.RequiredDeclaration = "workspace-verify.json commands or explicit deferral in risks/assumptions"
 		report.Checks["cross_repo_verify"] = "SKIP"
+		if hasCrossRepoDependencies(workspaceRoot) {
+			report.Valid = false
+			report.Errors = append(report.Errors, PlanValidationIssue{
+				Level:   "error",
+				Code:    "cross_repo_verify_not_declared",
+				Message: "cross-repository dependencies exist but no workspace verification commands are declared",
+			})
+		}
 		return report, nil
 	}
+	report.Status = "RUN"
 	for _, cmd := range cmds {
 		cmd = strings.TrimSpace(cmd)
 		if cmd == "" {
@@ -140,9 +157,31 @@ func RunCrossRepoVerification(workspaceRoot string, timeoutSeconds int) (CrossRe
 		}
 	}
 	if report.Valid {
+		report.Status = "PASSED"
 		report.Checks["cross_repo_verify"] = "PASS"
 	} else {
+		report.Status = "FAILED"
 		report.Checks["cross_repo_verify"] = "FAIL"
 	}
 	return report, nil
+}
+
+func hasCrossRepoDependencies(workspaceRoot string) bool {
+	tasks, err := LoadTasks(workspaceRoot)
+	if err != nil {
+		return false
+	}
+	byID := map[string]Task{}
+	for _, task := range tasks {
+		byID[task.ID] = task
+	}
+	for _, task := range tasks {
+		for _, depID := range task.Dependencies {
+			dep, ok := byID[depID]
+			if ok && dep.Repository != task.Repository {
+				return true
+			}
+		}
+	}
+	return false
 }

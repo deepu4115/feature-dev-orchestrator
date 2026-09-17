@@ -27,6 +27,7 @@ type PlanReviewJSON struct {
 	RepoAnalysis        []DraftRepoAnalysisEntry `json:"repo_analysis,omitempty"`
 	VerificationStrategy map[string][]string  `json:"verification_strategy,omitempty"`
 	Validation          map[string]string     `json:"validation"`
+	CoverageMatrix      []CoverageMatrixRow   `json:"coverage_matrix,omitempty"`
 	Errors              []PlanValidationIssue `json:"errors,omitempty"`
 	Warnings            []PlanValidationIssue `json:"warnings,omitempty"`
 }
@@ -45,6 +46,10 @@ func BuildPlanReviewJSON(workspaceRoot string, doc PlanDocument, ws WorkflowStat
 	snapshot := ""
 	if ws.CurrentPlanRevision > 0 {
 		snapshot = PlanRevisionTasksPath(workspaceRoot, ws.CurrentPlanRevision)
+	}
+	coverageMatrix := []CoverageMatrixRow{}
+	if coverage, err := LoadPlanCoverageReport(workspaceRoot); err == nil {
+		coverageMatrix = coverage.CoverageMatrix
 	}
 	return PlanReviewJSON{
 		Revision:            ws.CurrentPlanRevision,
@@ -65,6 +70,7 @@ func BuildPlanReviewJSON(workspaceRoot string, doc PlanDocument, ws WorkflowStat
 		Impact:              doc.ExpectedChangeAreas,
 		VerificationStrategy: doc.Verification.ByRepo,
 		Validation:          report.Checks,
+		CoverageMatrix:      coverageMatrix,
 		Errors:              report.Errors,
 		Warnings:            report.Warnings,
 	}

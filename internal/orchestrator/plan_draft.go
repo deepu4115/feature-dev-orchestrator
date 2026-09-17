@@ -8,8 +8,12 @@ import (
 )
 
 type DraftRequirement struct {
-	ID          string `json:"id"`
-	Description string `json:"description"`
+	ID              string   `json:"id"`
+	Description     string   `json:"description"`
+	SourceSection   string   `json:"source_section,omitempty"`
+	SourceRef       string   `json:"source_ref,omitempty"`
+	SourceLine      int      `json:"source_line,omitempty"`
+	SubRequirements []string `json:"sub_requirements,omitempty"`
 }
 
 type DraftRequirementsFile struct {

@@ -135,6 +135,12 @@ func ExecuteNext(workspaceRoot string, opts ExecuteNextOptions) (ExecuteNextResu
 		if err := SaveTasks(workspaceRoot, tasks); err != nil {
 			return ExecuteNextResult{}, err
 		}
+		tasks, unlocked, _ := PromoteTasksAfterCompletion(workspaceRoot, tasks)
+		if len(unlocked) > 0 {
+			if err := SaveTasks(workspaceRoot, tasks); err != nil {
+				return ExecuteNextResult{}, err
+			}
+		}
 		_ = SyncWorkflowFromTasks(workspaceRoot)
 		result.StatusAfter = tasks[idx].Status
 		result.Message = "verification passed and task marked DONE"

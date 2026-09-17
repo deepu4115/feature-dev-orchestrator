@@ -122,9 +122,12 @@ func verifyTask(workspaceRoot string, tasks []Task, taskID string, timeoutSecond
 		return nil, VerificationResult{}, fmt.Errorf("task %s must be IMPLEMENTED or VERIFYING before verification", target.ID)
 	}
 
-	repoPath := filepath.Join(workspaceRoot, target.Repository)
+	repoPath, err := ResolveVerificationDirectory(workspaceRoot, target)
+	if err != nil {
+		return nil, VerificationResult{}, err
+	}
 	if _, err := os.Stat(repoPath); err != nil {
-		return nil, VerificationResult{}, fmt.Errorf("repository path %s is not available: %w", repoPath, err)
+		return nil, VerificationResult{}, fmt.Errorf("verification directory %s is not available: %w", repoPath, err)
 	}
 
 	if target.Status == StatusImplemented {
@@ -137,7 +140,7 @@ func verifyTask(workspaceRoot string, tasks []Task, taskID string, timeoutSecond
 	for _, step := range target.Verification {
 		candidate := strings.TrimSpace(step.Command)
 		if candidate != "" {
-			command = candidate
+			command = NormalizeVerificationCommand(target, candidate)
 			break
 		}
 	}

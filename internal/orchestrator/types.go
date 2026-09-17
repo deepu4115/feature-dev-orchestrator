@@ -100,6 +100,7 @@ type WorkflowState struct {
 	ApprovedPlanFingerprint  string                 `json:"approved_plan_fingerprint,omitempty"`
 	WorkflowStatus           WorkflowStatus         `json:"workflow_status"`
 	ApprovalHistory          []ApprovalHistoryEntry `json:"approval_history,omitempty"`
+	CoverageDeferralReason   string                 `json:"coverage_deferral_reason,omitempty"`
 	UpdatedAt                time.Time              `json:"updated_at"`
 }
 
@@ -135,7 +136,8 @@ type Task struct {
 	ExpectedFiles      []string           `json:"expected_files,omitempty" yaml:"expected_files,omitempty"`
 	ContextRefs        []string           `json:"context_refs,omitempty" yaml:"context_refs,omitempty"`
 	AcceptanceCriteria []string           `json:"acceptance_criteria,omitempty" yaml:"acceptance_criteria,omitempty"`
-	Verification       []VerificationStep `json:"verification,omitempty" yaml:"verification,omitempty"`
+	Verification                 []VerificationStep `json:"verification,omitempty" yaml:"verification,omitempty"`
+	VerificationWorkingDirectory string             `json:"verification_working_directory,omitempty" yaml:"verification_working_directory,omitempty"`
 	VerificationStale  bool               `json:"verification_stale,omitempty" yaml:"verification_stale,omitempty"`
 	RepositoryRationale string            `json:"repository_rationale,omitempty" yaml:"repository_rationale,omitempty"`
 	OwnershipConfidence string            `json:"ownership_confidence,omitempty" yaml:"ownership_confidence,omitempty"`

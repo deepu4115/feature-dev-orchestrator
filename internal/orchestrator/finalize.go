@@ -10,11 +10,15 @@ import (
 )
 
 type FinalizeResult struct {
-	Completed         bool                `json:"completed"`
-	WorkflowStatus    WorkflowStatus      `json:"workflow_status"`
-	Traceability      TraceabilityReport  `json:"traceability"`
-	CrossRepoVerify   CrossRepoVerifyReport `json:"cross_repo_verify"`
-	StoppedReason     string              `json:"stopped_reason,omitempty"`
+	Completed           bool                  `json:"completed"`
+	WorkflowStatus      WorkflowStatus        `json:"workflow_status"`
+	CompletionReady     bool                  `json:"completion_ready"`
+	ApprovalRequired    bool                  `json:"approval_required"`
+	Finalization        FinalizationStatus    `json:"finalization"`
+	ApprovedPlanRevision *int                 `json:"approved_plan_revision,omitempty"`
+	Traceability        TraceabilityReport    `json:"traceability"`
+	CrossRepoVerify     CrossRepoVerifyReport `json:"cross_repo_verify"`
+	StoppedReason       string                `json:"stopped_reason,omitempty"`
 }
 
 func MaybeAutoCompleteFeature(workspaceRoot string, timeoutSeconds int) (FinalizeResult, error) {
@@ -75,8 +79,13 @@ func MaybeAutoCompleteFeature(workspaceRoot string, timeoutSeconds int) (Finaliz
 	if err := SaveWorkflowState(workspaceRoot, ws); err != nil {
 		return result, err
 	}
+	ClearValidationArtifactsOnSuccess(workspaceRoot)
 	result.Completed = true
 	result.WorkflowStatus = ws.WorkflowStatus
+	result.CompletionReady = true
+	result.ApprovalRequired = false
+	result.Finalization = FinalizationPassed
+	result.ApprovedPlanRevision = ws.ApprovedPlanRevision
 	return result, nil
 }
 

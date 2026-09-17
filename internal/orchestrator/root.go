@@ -18,6 +18,7 @@ func BuildRootCommand() *cobra.Command {
 
 	root.AddCommand(BuildVersionCommand())
 	root.AddCommand(BuildDoctorCommand())
+	root.AddCommand(BuildRepairCommand())
 	root.AddCommand(BuildInitCommand())
 	root.AddCommand(BuildDiscoverCommand())
 	root.AddCommand(BuildRepositoriesCommand())
@@ -70,20 +71,32 @@ func BuildDoctorCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if !Exists(ResolveFeatureDir(workspaceRoot)) {
-				return fmt.Errorf("workspace is not initialized: missing %s", DefaultFeatureDir)
-			}
-			cfg, err := LoadWorkspaceConfig(workspaceRoot)
+			jsonFlag, _ := cmd.Flags().GetBool("json")
+			report, err := RunDoctor(workspaceRoot)
 			if err != nil {
-				return fmt.Errorf("load workspace config: %w", err)
+				return err
 			}
-			if cfg.SchemaVersion == "" {
-				return fmt.Errorf("invalid workspace config: schema_version missing")
+			if jsonFlag {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(report)
+			}
+			if !report.Valid {
+				for _, check := range report.Checks {
+					if check.Status != "PASS" {
+						fmt.Printf("%s: %s - %s\n", check.Name, check.Status, check.Message)
+						if check.Fix != "" {
+							fmt.Printf("  fix: %s\n", check.Fix)
+						}
+					}
+				}
+				return fmt.Errorf("doctor found workspace issues")
 			}
 			fmt.Println("workspace configuration looks valid")
 			return nil
 		},
 	}
+	cmd.Flags().Bool("json", false, "Emit doctor report as JSON")
 	return cmd
 }
 
@@ -171,24 +184,23 @@ func BuildStatusCommand() *cobra.Command {
 				return err
 			}
 			jsonFlag, _ := cmd.Flags().GetBool("json")
-			ws, err := LoadWorkflowState(workspaceRoot)
+			status, err := BuildWorkspaceStatus(workspaceRoot)
 			if err != nil {
 				return err
 			}
-			tasks, _ := LoadTasks(workspaceRoot)
-			done, total := countTasksDone(tasks)
-			completionReady := done == total && total > 0 && ws.WorkflowStatus != WorkflowCompleted
 			payload := map[string]any{
-				"workspace":              workspaceRoot,
-				"feature_dir":            ResolveFeatureDir(workspaceRoot),
-				"workflow_status":        ws.WorkflowStatus,
-				"current_plan_revision":  ws.CurrentPlanRevision,
-				"approved_plan_revision": ws.ApprovedPlanRevision,
-				"approval_required":      ApprovalRequired(ws),
-				"tasks_done":             done,
-				"tasks_total":            total,
-				"completion_ready":       completionReady,
-				"final_gates":            []string{"traceability-check", "verify-cross-repo", "finalize"},
+				"workspace":              status.Workspace,
+				"feature_dir":            status.FeatureDir,
+				"workflow_status":        status.WorkflowStatus,
+				"current_plan_revision":  status.CurrentPlanRevision,
+				"approved_plan_revision": status.ApprovedPlanRevision,
+				"approval_required":      status.ApprovalRequired,
+				"tasks_done":             status.TasksDone,
+				"tasks_total":            status.TasksTotal,
+				"completed":              status.Completed,
+				"completion_ready":       status.CompletionReady,
+				"finalization":           status.Finalization,
+				"final_gates":            status.FinalGates,
 			}
 			if jsonFlag {
 				enc := json.NewEncoder(os.Stdout)
@@ -197,11 +209,11 @@ func BuildStatusCommand() *cobra.Command {
 			}
 			fmt.Printf("workspace: %s\n", payload["workspace"])
 			fmt.Printf("feature dir: %s\n", payload["feature_dir"])
-			fmt.Printf("workflow status: %s\n", ws.WorkflowStatus)
-			if ws.CurrentPlanRevision > 0 {
-				fmt.Printf("plan revision: %d\n", ws.CurrentPlanRevision)
-				if ws.ApprovedPlanRevision != nil {
-					fmt.Printf("approved revision: %d\n", *ws.ApprovedPlanRevision)
+			fmt.Printf("workflow status: %s\n", status.WorkflowStatus)
+			if status.CurrentPlanRevision > 0 {
+				fmt.Printf("plan revision: %d\n", status.CurrentPlanRevision)
+				if status.ApprovedPlanRevision != nil {
+					fmt.Printf("approved revision: %d\n", *status.ApprovedPlanRevision)
 				}
 			}
 			return nil

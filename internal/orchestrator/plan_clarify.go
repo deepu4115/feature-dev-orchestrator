@@ -218,6 +218,14 @@ func WriteClarificationResponses(workspaceRoot string, responses ClarificationRe
 	return WriteFileAtomically(PlanDraftClarificationResponsesPath(workspaceRoot), append(data, '\n'))
 }
 
+func ClearLastValidationReport(workspaceRoot string) error {
+	path := PlanDraftLastValidationPath(workspaceRoot)
+	if !Exists(path) {
+		return nil
+	}
+	return os.Remove(path)
+}
+
 func WriteLastValidationReport(workspaceRoot string, report PlanValidationReport) error {
 	if err := EnsureDir(PlanDraftDir(workspaceRoot)); err != nil {
 		return err

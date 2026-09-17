@@ -114,6 +114,16 @@ func ValidateTaskPlan(workspaceRoot string, tasks []Task, fromTasks bool) (PlanV
 			})
 		}
 
+		cwdIssues, _ := ValidateVerificationCommands(task)
+		for _, issue := range cwdIssues {
+			if issue.Level == "error" {
+				report.Valid = false
+				report.Errors = append(report.Errors, issue)
+			} else {
+				report.Warnings = append(report.Warnings, issue)
+			}
+		}
+
 		if strings.ToUpper(strings.TrimSpace(task.OwnershipConfidence)) == "LOW" {
 			report.Warnings = append(report.Warnings, PlanValidationIssue{
 				Level: "warning", Code: "low_ownership_confidence",
@@ -205,6 +215,25 @@ func ValidateTaskPlan(workspaceRoot string, tasks []Task, fromTasks bool) (PlanV
 			Level: "warning", Code: "all_tasks_blocked",
 			Message: "all tasks appear blocked with no executable path",
 		})
+	}
+
+	if fromTasks && hasCrossRepoDependencies(workspaceRoot) {
+		bundle, _ := LoadPlanningDraftBundle(workspaceRoot)
+		hasWorkspaceVerify := len(bundle.WorkspaceVerify.Commands) > 0
+		hasDeferral := false
+		for _, risk := range bundle.Risks.Risks {
+			if strings.Contains(strings.ToLower(risk.Description), "cross_repo_verification_deferral") {
+				hasDeferral = true
+				break
+			}
+		}
+		if !hasWorkspaceVerify && !hasDeferral {
+			report.Warnings = append(report.Warnings, PlanValidationIssue{
+				Level:   "warning",
+				Code:    "cross_repo_verify_not_declared",
+				Message: "cross-repository dependencies detected; declare workspace-verify.json commands or cross_repo_verification_deferral in risks",
+			})
+		}
 	}
 
 	if report.Valid {

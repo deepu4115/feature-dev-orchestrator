@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -173,6 +174,7 @@ func SubmitPlan(workspaceRoot string, opts SubmitPlanOptions) (SubmitPlanResult,
 			return SubmitPlanResult{}, err
 		}
 		result.ReviewPath = filepath.Join(revDir, "review.md")
+		ClearValidationArtifactsOnSuccess(workspaceRoot)
 	}
 
 	tasks, err := SyncPlanTasksToRuntime(workspaceRoot, doc.Tasks)
@@ -244,23 +246,17 @@ func PreviewTaskPlan(workspaceRoot string) (PlanReviewJSON, PlanDocument, PlanVa
 		return PlanReviewJSON{}, PlanDocument{}, PlanValidationReport{}, err
 	}
 	tasks := taskLoad.Tasks
-	var taskReport PlanValidationReport
-	if !taskLoad.Report.Valid {
-		taskReport = taskLoad.Report
-	} else {
-		taskReport, err = ValidateTaskPlan(workspaceRoot, tasks, true)
-		if err != nil {
-			return PlanReviewJSON{}, PlanDocument{}, PlanValidationReport{}, err
-		}
+	report, err := RunOrderedPlanValidation(workspaceRoot, "PLAN.md")
+	if err != nil {
+		return PlanReviewJSON{}, PlanDocument{}, PlanValidationReport{}, err
 	}
-	bundle, _ := LoadPlanningDraftBundle(workspaceRoot)
-	bundleEarly := ValidateDraftBundleEarly(workspaceRoot, bundle)
-	report := MergeValidationReports(taskReport, bundleEarly)
+	if !taskLoad.Report.Valid {
+		report = MergeValidationReports(taskLoad.Report, report)
+	}
 	doc := PlanDocument{}
+	bundle, _ := LoadPlanningDraftBundle(workspaceRoot)
 	if Exists(PlanDraftRequirementsPath(workspaceRoot)) {
 		doc = MergeDraftBundleIntoPlan(bundle, tasks, PlanFeature{ID: "feature", Title: "Feature implementation plan"})
-		merged := ValidateDraftBundleMerged(workspaceRoot, bundle, tasks, doc)
-		report = MergeValidationReports(report, merged)
 	} else if ws.CurrentPlanRevision > 0 {
 		doc, _ = LoadCurrentPlanDocument(workspaceRoot)
 	}
@@ -303,7 +299,124 @@ func BuildPlanCommand() *cobra.Command {
 	plan.AddCommand(buildPlanValidateCommand())
 	plan.AddCommand(buildPlanClarifyCommand())
 	plan.AddCommand(buildPlanClarifyRecordCommand())
+	plan.AddCommand(buildPlanCoverageCommand())
+	plan.AddCommand(buildPlanScaffoldCommand())
 	return plan
+}
+
+func buildPlanCoverageCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "coverage",
+		Short: "Compare PLAN.md source items against requirements and tasks",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workspaceRoot, err := ResolveWorkspaceRoot()
+			if err != nil {
+				return err
+			}
+			from, _ := cmd.Flags().GetString("from")
+			jsonFlag, _ := cmd.Flags().GetBool("json")
+			report, err := RunPlanCoverage(workspaceRoot, from)
+			if err != nil {
+				return err
+			}
+			if jsonFlag {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(report)
+			}
+			fmt.Printf("valid: %t\n", report.Valid)
+			fmt.Printf("source: %s\n", report.Source)
+			for k, v := range report.Checks {
+				fmt.Printf("check %s: %s\n", k, v)
+			}
+			for _, action := range report.AgentActions {
+				fmt.Printf("- %s\n", action)
+			}
+			if !report.Valid {
+				return fmt.Errorf("plan coverage incomplete")
+			}
+			return nil
+		},
+	}
+	cmd.Flags().String("from", "PLAN.md", "Path to PLAN.md")
+	cmd.Flags().Bool("json", false, "Emit coverage report as JSON")
+	return cmd
+}
+
+func buildPlanScaffoldCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "scaffold",
+		Short: "Scaffold planning bundle and tasks, then run PLAN coverage",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workspaceRoot, err := ResolveWorkspaceRoot()
+			if err != nil {
+				return err
+			}
+			if !Exists(ResolveFeatureDir(workspaceRoot)) {
+				return fmt.Errorf("workspace not initialized; run feature-dev init first")
+			}
+			from, _ := cmd.Flags().GetString("from")
+			jsonFlag, _ := cmd.Flags().GetBool("json")
+			force, _ := cmd.Flags().GetBool("force")
+
+			draftWritten, err := InitPlanningDraftFromTemplates(workspaceRoot, force)
+			if err != nil {
+				return err
+			}
+			taskPath, err := InitTasksFromTemplate(workspaceRoot, force)
+			if err != nil && !strings.Contains(err.Error(), "already exists") {
+				return err
+			}
+			coverage, err := RunPlanCoverage(workspaceRoot, from)
+			if err != nil && !os.IsNotExist(err) {
+				return err
+			}
+
+			nextSteps := []string{
+				"Read PLAN.md and populate requirements.json with source_section/source_ref fields",
+				"Map each requirement to tasks via requirement_ids in tasks.json",
+				fmt.Sprintf("Run: feature-dev plan coverage --from %s --json", from),
+				"Run: feature-dev task preview --json",
+				"Run: feature-dev plan submit --from-tasks",
+			}
+			manifest := map[string]any{
+				"required_files": []string{
+					".feature/plans/draft/requirements.json",
+					".feature/plans/draft/assumptions.json",
+					".feature/plans/draft/risks.json",
+					".feature/plans/draft/impact.json",
+					".feature/plans/draft/repo-analysis.json",
+					".feature/tasks/tasks.json",
+				},
+				"schema_artifacts": ListSchemaArtifacts(),
+				"next_agent_steps": nextSteps,
+			}
+			manifestPath := filepath.Join(PlanDraftDir(workspaceRoot), "manifest.json")
+			data, _ := json.MarshalIndent(manifest, "", "  ")
+			_ = WriteFileAtomically(manifestPath, append(data, '\n'))
+
+			if jsonFlag {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(map[string]any{
+					"draft_written": draftWritten,
+					"tasks_path":    taskPath,
+					"coverage":      coverage,
+					"manifest":      manifestPath,
+					"next_steps":    nextSteps,
+				})
+			}
+			fmt.Println("Scaffold complete. Calling agent: read PLAN.md, resolve unmapped items, then run task preview.")
+			for _, step := range nextSteps {
+				fmt.Printf("- %s\n", step)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().String("from", "PLAN.md", "Path to PLAN.md")
+	cmd.Flags().Bool("force", false, "Overwrite existing draft files and tasks.json")
+	cmd.Flags().Bool("json", false, "Emit scaffold result as JSON")
+	return cmd
 }
 
 func buildPlanValidateCommand() *cobra.Command {
@@ -440,8 +553,9 @@ func BuildApproveCommand() *cobra.Command {
 				return err
 			}
 			revision, _ := cmd.Flags().GetInt("revision")
+			deferUnmapped, _ := cmd.Flags().GetString("defer-unmapped")
 			jsonFlag, _ := cmd.Flags().GetBool("json")
-			result, _, _, err := ApprovePlan(workspaceRoot, ApprovePlanOptions{Revision: revision})
+			result, _, _, err := ApprovePlan(workspaceRoot, ApprovePlanOptions{Revision: revision, DeferUnmapped: deferUnmapped})
 			if err != nil {
 				return err
 			}
@@ -463,6 +577,7 @@ func BuildApproveCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().Int("revision", 0, "Explicit revision to approve (defaults to current)")
+	cmd.Flags().String("defer-unmapped", "", "Defer incomplete PLAN coverage with documented reason")
 	cmd.Flags().Bool("json", false, "Emit result as JSON")
 	return cmd
 }

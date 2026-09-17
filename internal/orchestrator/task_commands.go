@@ -23,6 +23,8 @@ func BuildTaskCommand() *cobra.Command {
 	cmd.AddCommand(BuildImplementTaskCommand())
 	cmd.AddCommand(BuildCompleteTaskCommand())
 	cmd.AddCommand(BuildFailTaskCommand())
+	cmd.AddCommand(BuildTaskExplainCommand())
+	cmd.AddCommand(BuildTaskValidateCommand())
 	return cmd
 }
 
@@ -287,6 +289,11 @@ func BuildCompleteTaskCommand() *cobra.Command {
 			if err := SaveTasks(workspaceRoot, tasks); err != nil {
 				return err
 			}
+			tasks, unlocked, _ := PromoteTasksAfterCompletion(workspaceRoot, tasks)
+			if len(unlocked) > 0 {
+				_ = SaveTasks(workspaceRoot, tasks)
+			}
+			_ = SyncWorkflowFromTasks(workspaceRoot)
 			if err := AppendTaskSummary(workspaceRoot, tasks[idx], "task_completed", "task moved to DONE"); err != nil {
 				return err
 			}
@@ -294,6 +301,73 @@ func BuildCompleteTaskCommand() *cobra.Command {
 			return nil
 		},
 	}
+	return cmd
+}
+
+func BuildTaskExplainCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "explain <task-id>",
+		Short: "Explain why a task is or is not ready",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workspaceRoot, err := ResolveWorkspaceRoot()
+			if err != nil {
+				return err
+			}
+			result, err := ExplainTask(workspaceRoot, args[0])
+			if err != nil {
+				return err
+			}
+			jsonFlag, _ := cmd.Flags().GetBool("json")
+			if jsonFlag {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(result)
+			}
+			fmt.Printf("task: %s\n", result.Task)
+			fmt.Printf("status: %s\n", result.Status)
+			fmt.Printf("ready: %t\n", result.Ready)
+			for _, reason := range result.BlockingReasons {
+				fmt.Printf("blocking: %s\n", reason)
+			}
+			fmt.Printf("suggested: %s\n", result.SuggestedNextCommand)
+			return nil
+		},
+	}
+	cmd.Flags().Bool("json", false, "Emit explanation as JSON")
+	return cmd
+}
+
+func BuildTaskValidateCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "validate",
+		Short: "Validate tasks.json syntax and schema without writing",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workspaceRoot, err := ResolveWorkspaceRoot()
+			if err != nil {
+				return err
+			}
+			result, err := LoadTasksWithReport(workspaceRoot)
+			if err != nil {
+				return err
+			}
+			jsonFlag, _ := cmd.Flags().GetBool("json")
+			if jsonFlag {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(result.Report)
+			}
+			fmt.Printf("valid: %t\n", result.Report.Valid)
+			for _, e := range result.Report.Errors {
+				fmt.Printf("- %s\n", e.Message)
+			}
+			if !result.Report.Valid {
+				return fmt.Errorf("tasks.json validation failed")
+			}
+			return nil
+		},
+	}
+	cmd.Flags().Bool("json", false, "Emit validation report as JSON")
 	return cmd
 }
 

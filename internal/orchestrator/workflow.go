@@ -56,6 +56,3 @@ func RequiresPlanApproval(ws WorkflowState) bool {
 	return ws.CurrentPlanRevision > 0
 }
 
-func ApprovalRequired(ws WorkflowState) bool {
-	return RequiresPlanApproval(ws) && ws.WorkflowStatus != WorkflowApproved
-}

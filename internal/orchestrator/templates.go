@@ -18,7 +18,9 @@ var schemaArtifacts = map[string]schemaArtifact{
 		RootKey:      "(top-level array)",
 		RequiredFields: []string{
 			"id (string)", "title (string)", "repository (string)",
-			"verification (array of {command, name?})", "requirement_ids (string array)",
+			"verification (array of {command, name?})",
+			"verification_working_directory (repository_root|workspace_root|custom, default repository_root)",
+			"requirement_ids (string array)",
 		},
 	},
 	"requirements": {

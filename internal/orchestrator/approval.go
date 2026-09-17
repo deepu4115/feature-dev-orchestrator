@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -94,7 +95,8 @@ func InvalidateApproval(ws *WorkflowState) {
 }
 
 type ApprovePlanOptions struct {
-	Revision int
+	Revision       int
+	DeferUnmapped  string
 }
 
 type ApprovePlanResult struct {
@@ -131,6 +133,20 @@ func ApprovePlan(workspaceRoot string, opts ApprovePlanOptions) (ApprovePlanResu
 		return ApprovePlanResult{}, ws, nil, err
 	}
 
+	planPath := ResolvePlanPath(workspaceRoot, "PLAN.md")
+	if Exists(planPath) {
+		coverage, err := RunPlanCoverage(workspaceRoot, "PLAN.md")
+		if err != nil {
+			return ApprovePlanResult{}, ws, nil, err
+		}
+		if !coverage.Valid {
+			if strings.TrimSpace(opts.DeferUnmapped) == "" {
+				return ApprovePlanResult{}, ws, nil, fmt.Errorf("plan coverage incomplete: %s (use --defer-unmapped with reason to override)", coverage.SuggestedPrompt)
+			}
+			ws.CoverageDeferralReason = opts.DeferUnmapped
+		}
+	}
+
 	result := ApprovePlanResult{Revision: targetRevision, Warnings: []string{}}
 	if warns, err := CheckRepositorySnapshotDrift(workspaceRoot, doc); err == nil {
 		result.Warnings = append(result.Warnings, warns...)
@@ -151,11 +167,13 @@ func ApprovePlan(workspaceRoot string, opts ApprovePlanOptions) (ApprovePlanResu
 	if err != nil {
 		return ApprovePlanResult{}, ws, nil, err
 	}
-	unlocked, err := PromoteApprovedTasks(tasks)
+	unlocked, err := PromoteDependencyReadyTasks(tasks)
 	if err != nil {
 		return ApprovePlanResult{}, ws, nil, err
 	}
 	result.UnlockedTasks = unlocked
+
+	ClearValidationArtifactsOnSuccess(workspaceRoot)
 
 	if err := SaveWorkflowState(workspaceRoot, ws); err != nil {
 		return ApprovePlanResult{}, ws, nil, err
@@ -190,6 +208,10 @@ func RejectPlan(workspaceRoot string, reason string) (WorkflowState, error) {
 }
 
 func PromoteApprovedTasks(tasks []Task) ([]string, error) {
+	return PromoteDependencyReadyTasks(tasks)
+}
+
+func PromoteDependencyReadyTasks(tasks []Task) ([]string, error) {
 	byID := map[string]int{}
 	for i, task := range tasks {
 		byID[task.ID] = i

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -28,6 +29,11 @@ type AgentHint struct {
 	CurrentPlanRevision   int            `json:"current_plan_revision,omitempty"`
 	ApprovedPlanRevision  *int           `json:"approved_plan_revision,omitempty"`
 	ApprovalRequired      bool           `json:"approval_required,omitempty"`
+	Completed             bool           `json:"completed,omitempty"`
+	CompletionReady       bool           `json:"completion_ready,omitempty"`
+	Finalization          string         `json:"finalization,omitempty"`
+	StateTimestamp        string         `json:"state_timestamp,omitempty"`
+	ValidationSource      string         `json:"validation_source,omitempty"`
 }
 
 func BuildAgentHint(workspaceRoot string) (AgentHint, error) {
@@ -49,10 +55,25 @@ func BuildAgentHint(workspaceRoot string) (AgentHint, error) {
 	if err != nil {
 		return hint, err
 	}
-	hint.WorkflowStatus = string(ws.WorkflowStatus)
-	hint.CurrentPlanRevision = ws.CurrentPlanRevision
-	hint.ApprovedPlanRevision = ws.ApprovedPlanRevision
-	hint.ApprovalRequired = ApprovalRequired(ws)
+	wsStatus, err := BuildWorkspaceStatus(workspaceRoot)
+	if err != nil {
+		return hint, err
+	}
+	hint.WorkflowStatus = string(wsStatus.WorkflowStatus)
+	hint.CurrentPlanRevision = wsStatus.CurrentPlanRevision
+	hint.ApprovedPlanRevision = wsStatus.ApprovedPlanRevision
+	hint.ApprovalRequired = wsStatus.ApprovalRequired
+	hint.Completed = wsStatus.Completed
+	hint.CompletionReady = wsStatus.CompletionReady
+	hint.Finalization = string(wsStatus.Finalization)
+	hint.StateTimestamp = ws.UpdatedAt.UTC().Format(time.RFC3339)
+
+	if ws.WorkflowStatus == WorkflowCompleted {
+		hint.Reason = "feature_completed"
+		hint.SuggestedNextCommand = "feature-dev status --json"
+		hint.SuggestedPrompt = "Feature workflow is COMPLETED. Summarize outcomes and verification results."
+		return hint, nil
+	}
 
 	repos, err := readRepositoryRegistry(workspaceRoot)
 	if err != nil {
@@ -65,11 +86,13 @@ func BuildAgentHint(workspaceRoot string) (AgentHint, error) {
 		return hint, err
 	}
 	if !taskLoad.Report.Valid {
+		hint.ValidationSource = "live"
 		hint.Reason = "schema_fix_required"
 		hint.SuggestedNextCommand = "feature-dev schema show tasks --json && feature-dev task init --force"
 		hint.SuggestedPrompt = "Fix tasks.json structure using schema show output, then run task preview --json before plan submit."
 		return hint, nil
 	}
+	hint.ValidationSource = "live"
 	tasks := taskLoad.Tasks
 	hint.TotalTasks = len(tasks)
 	hint.TaskCountByStatus = summarizeTaskStatuses(tasks)
@@ -87,10 +110,20 @@ func BuildAgentHint(workspaceRoot string) (AgentHint, error) {
 	hint.ImplementedTasks = append(taskIDsByStatus(tasks, StatusImplemented), taskIDsByStatus(tasks, StatusVerifying)...)
 	sort.Strings(hint.ImplementedTasks)
 
-	if structuralReport, ok := loadLastStructuralValidation(workspaceRoot); ok {
-		hint.Reason = "schema_fix_required"
-		hint.SuggestedNextCommand = structuralFixCommand(structuralReport)
-		hint.SuggestedPrompt = "Fix JSON structure errors in planning artifacts using schema show and init commands, then run feature-dev task preview --json."
+	if shouldUseCachedStructuralValidation(ws) {
+		if structuralReport, ok := loadLastStructuralValidation(workspaceRoot); ok {
+			hint.ValidationSource = "cached"
+			hint.Reason = "schema_fix_required"
+			hint.SuggestedNextCommand = structuralFixCommand(structuralReport)
+			hint.SuggestedPrompt = "Fix JSON structure errors in planning artifacts using schema show and init commands, then run feature-dev task preview --json."
+			return hint, nil
+		}
+	}
+
+	if coverageIncomplete, coverageCmd := planCoverageIncompleteHint(workspaceRoot); coverageIncomplete {
+		hint.Reason = "plan_coverage_incomplete"
+		hint.SuggestedNextCommand = coverageCmd
+		hint.SuggestedPrompt = "PLAN.md coverage is incomplete. Update requirements.json and tasks.json using plan coverage output, then re-run task preview."
 		return hint, nil
 	}
 
@@ -157,11 +190,6 @@ func BuildAgentHint(workspaceRoot string) (AgentHint, error) {
 			}
 			hint.Reason = "ready_for_orchestration"
 			hint.SuggestedNextCommand = "feature-dev execute-loop --json"
-			return hint, nil
-		case WorkflowCompleted:
-			hint.Reason = "feature_completed"
-			hint.SuggestedNextCommand = "feature-dev status --json"
-			hint.SuggestedPrompt = "Feature workflow is COMPLETED. Summarize outcomes and verification results."
 			return hint, nil
 		default:
 			if ws.WorkflowStatus != WorkflowExecuting && ws.WorkflowStatus != WorkflowCompleted {
@@ -354,6 +382,30 @@ func structuralFixCommand(report PlanValidationReport) string {
 		}
 	}
 	return "feature-dev schema list --json && feature-dev plan draft init --force && feature-dev task init --force"
+}
+
+func shouldUseCachedStructuralValidation(ws WorkflowState) bool {
+	switch ws.WorkflowStatus {
+	case WorkflowPlanning, WorkflowClarificationNeeded, WorkflowPlanGenerated:
+		return true
+	default:
+		return false
+	}
+}
+
+func planCoverageIncompleteHint(workspaceRoot string) (bool, string) {
+	if !Exists(PlanDraftCoveragePath(workspaceRoot)) {
+		return false, ""
+	}
+	report, err := LoadPlanCoverageReport(workspaceRoot)
+	if err != nil || report.Valid {
+		return false, ""
+	}
+	planPath := report.Source
+	if planPath == "" {
+		planPath = "PLAN.md"
+	}
+	return true, fmt.Sprintf("feature-dev plan coverage --from %s --json", planPath)
 }
 
 func remainingTaskCount(tasks []Task) int {
