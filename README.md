@@ -342,10 +342,14 @@ feature-dev init
 feature-dev discover
 feature-dev doctor
 feature-dev agent-hint --json
-# Agent analyzes PLAN.md + repos, writes planning bundle + .feature/tasks/tasks.json
+feature-dev plan draft init
+feature-dev task init
+# Agent analyzes PLAN.md + repos, edits scaffolded planning bundle + tasks.json
+feature-dev schema show tasks --json   # canonical JSON contract
 feature-dev task preview --json
 feature-dev plan submit --from-tasks
-# on validation failure: feature-dev plan clarify --json → fix → resubmit
+# structural errors: schema show + plan draft init / task init → preview again
+# domain errors: feature-dev plan clarify --json → fix → resubmit
 feature-dev review --json
 feature-dev graph
 # user reviews tasks.json and approves
@@ -484,25 +488,28 @@ feature-dev doctor
 
 This validates that the workspace is properly configured.
 
-### Step 6: Deep plan and write tasks.json
+### Step 6: Scaffold and complete planning artifacts
 
-After reading `PLAN.md` and inspecting relevant repositories, write the task graph to `.feature/tasks/tasks.json`. Use the template at `.github/skills/feature-dev-orchestrator/assets/task-dag-template.json` as a starting point.
+Scaffold valid planning files from built-in templates:
+
+```bash
+feature-dev plan draft init
+feature-dev task init
+feature-dev schema show tasks --json
+```
+
+After reading `PLAN.md` and inspecting relevant repositories, edit the scaffolded files. `tasks.json` must be a **top-level JSON array** (not `{"tasks": [...]}`). Each task's `verification` field must be an array of objects with a `command` field.
 
 Each task needs at minimum:
 
 - `id`, `title`, `repository`, `dependencies`, `verification`
 - a repository name that matches `.feature/repositories.json`
 
+Draft bundle files use wrapper objects: `{"requirements": [...]}`, `{"assumptions": [...]}`, etc. Use `feature-dev schema show <artifact> --json` for the exact contract.
+
 Recommended planning fields:
 
 - `repository_rationale`, `ownership_confidence`, `requirement_ids`, `planned_verification`
-
-You can also seed tasks with the CLI, then edit the file:
-
-```bash
-feature-dev task add T001 "Implement feature slice"
-feature-dev task add T002 "Add tests"
-```
 
 ### Step 7: Submit, review, and approve
 
@@ -786,9 +793,11 @@ When a plan revision exists, the hint routes to review/approve before execution.
 
 | Reason | Meaning | Suggested next step |
 |--------|---------|---------------------|
-| `planning_bundle_incomplete` | draft bundle files missing | complete `.feature/plans/draft/` files |
+| `planning_bundle_incomplete` | draft bundle files missing | `plan draft init`, then `task preview --json` |
+| `schema_fix_required` | JSON shape invalid | `schema show <artifact> --json`, fix, rerun preview |
+| `planning_in_progress` | structural fixes needed or planning incomplete | complete bundle + tasks, preview, submit |
 | `tasks_need_submit` | tasks.json exists but no revision submitted | `plan submit --from-tasks` |
-| `plan_needs_clarification` | validation failed; workflow `CLARIFICATION_NEEDED` | `plan clarify --json`, ask user, fix, resubmit |
+| `plan_needs_clarification` | domain validation failed; workflow `CLARIFICATION_NEEDED` | `plan clarify --json`, ask user, fix, resubmit |
 | `task_plan_invalid` | validation failed on last submit | fix artifacts and resubmit |
 | `tasks_awaiting_approval` | plan in `REVIEW_PENDING` | present review and wait |
 | `plan_approved_ready` | approved; execution unlocked | `reconcile && execute-loop --json` |
@@ -804,12 +813,32 @@ Submits an immutable plan revision. Primary path:
 feature-dev plan submit --from-tasks
 ```
 
-Requires the planning bundle under `.feature/plans/draft/` (requirements, assumptions, risks, impact, repo-analysis) plus `tasks.json`. Validates strictly before `REVIEW_PENDING`. On failure, sets `CLARIFICATION_NEEDED` and writes `clarification-request.json`.
+Requires the planning bundle under `.feature/plans/draft/` (requirements, assumptions, risks, impact, repo-analysis) plus `tasks.json`. Validates strictly before `REVIEW_PENDING`. On **structural** failure (bad JSON shape), keeps workflow in `PLANNING`. On **domain** failure, sets `CLARIFICATION_NEEDED` and writes `clarification-request.json`.
 
 Also accepts a draft YAML file (`--from .feature/plans/draft/plan.yaml`) for legacy workspaces without a bundle.
 
+### `feature-dev plan draft init`
+Scaffolds valid planning draft bundle files (requirements, assumptions, risks, impact, repo-analysis) from built-in templates. Use `--force` to overwrite existing files.
+
+### `feature-dev plan validate`
+Alias for `task preview` — validates tasks and draft bundle before submit.
+
 ### `feature-dev plan clarify`
-Shows targeted clarification questions from the last failed validation (`--json` recommended for agents).
+Shows targeted clarification questions from the last failed **domain** validation (`--json` recommended for agents). Structural JSON errors do not generate clarification questions.
+
+### `feature-dev schema show`
+Shows the canonical JSON example and field contract for a planning artifact:
+
+```bash
+feature-dev schema list
+feature-dev schema show tasks --json
+feature-dev schema show requirements --json
+```
+
+Artifacts: `tasks`, `requirements`, `assumptions`, `risks`, `impact`, `repo-analysis`.
+
+### `feature-dev task init`
+Scaffolds a valid `.feature/tasks/tasks.json` from a built-in template (top-level array with example `verification` objects). Use `--force` to overwrite.
 
 ### `feature-dev review`
 Loads the current plan revision and presents a **tasks.json-first** review plus requirements, assumptions, risks, impact, and verification strategy. Use `--json` for agent automation.

@@ -1,0 +1,11 @@
+{
+  "risks": [
+    {
+      "id": "RK001",
+      "type": "CROSS_REPOSITORY",
+      "level": "MEDIUM",
+      "description": "Describe a plan risk",
+      "mitigation": ["mitigation step"]
+    }
+  ]
+}

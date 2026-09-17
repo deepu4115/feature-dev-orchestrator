@@ -1,0 +1,8 @@
+{
+  "requirements": [
+    {
+      "id": "R001",
+      "description": "Describe the requirement extracted from PLAN.md"
+    }
+  ]
+}

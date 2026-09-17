@@ -3,20 +3,28 @@
 ## Deep Planning Phase (Required Before Implementation)
 1. Read `PLAN.md` and extract requirements and acceptance criteria.
 2. `go run ./cmd/feature-dev discover` and read `.feature/repositories.json`.
-3. Inspect each relevant repository: entrypoints, modules, APIs, tests, ownership boundaries.
-4. Write the planning bundle under `.feature/plans/draft/`:
-   - `requirements.json` — authoritative requirement list
-   - `assumptions.json` — confidence, impact, evidence
-   - `risks.json` — level, type, mitigation
-   - `impact.json` — repos and change areas
-   - `repo-analysis.json` — evidence paths per repo
+3. Scaffold valid planning files:
+   - `go run ./cmd/feature-dev plan draft init`
+   - `go run ./cmd/feature-dev task init`
+4. Use `go run ./cmd/feature-dev schema show <artifact> --json` for JSON contracts (`tasks`, `requirements`, `assumptions`, `risks`, `impact`, `repo-analysis`).
+5. Inspect each relevant repository: entrypoints, modules, APIs, tests, ownership boundaries.
+6. Edit the planning bundle under `.feature/plans/draft/`:
+   - `requirements.json` — wrapper object with `requirements` array
+   - `assumptions.json` — wrapper object with `assumptions` array
+   - `risks.json` — wrapper object with `risks` array
+   - `impact.json` — wrapper object with `impact` array
+   - `repo-analysis.json` — wrapper object with `repositories` array
    - `workspace-verify.json` — optional cross-repo integration commands
-5. Write `.feature/tasks/tasks.json` with task id, title, repository, dependencies, verification, planning metadata.
-6. Do not modify production source during planning.
-7. `go run ./cmd/feature-dev graph`
-8. `go run ./cmd/feature-dev task preview --json`
-9. `go run ./cmd/feature-dev plan submit --from-tasks`
-10. If validation fails:
+7. Edit `.feature/tasks/tasks.json` as a **top-level JSON array** with `verification` as `[{"command": "..."}]`.
+8. Do not modify production source during planning.
+9. `go run ./cmd/feature-dev graph`
+10. `go run ./cmd/feature-dev task preview --json` (or `plan validate --json`)
+11. `go run ./cmd/feature-dev plan submit --from-tasks`
+12. If **structural** validation fails (JSON shape):
+    - `go run ./cmd/feature-dev schema show <artifact> --json`
+    - Fix files or rerun `plan draft init --force` / `task init --force`
+    - Rerun `task preview --json`
+13. If **domain** validation fails:
     - `go run ./cmd/feature-dev plan clarify --json`
     - Present questions to the user and **wait for answers**
     - Update draft bundle + tasks.json
@@ -34,7 +42,9 @@ If the user requests changes:
 4. Repeat review and approval.
 
 ## Clarification Loop
-When strict validation fails, workflow enters `CLARIFICATION_NEEDED`. The CLI writes `.feature/plans/draft/clarification-request.json` with targeted questions. Do not guess — ask the user, record answers in `clarification-responses.json` (or edit files directly), then resubmit.
+When **domain** validation fails (missing requirements, orphan requirements, repo ownership), workflow enters `CLARIFICATION_NEEDED`. The CLI writes `.feature/plans/draft/clarification-request.json` with targeted questions. Do not guess — ask the user, record answers in `clarification-responses.json` (or edit files directly), then resubmit.
+
+When **structural** validation fails (wrong JSON shape, bad `verification` type), workflow stays in `PLANNING`. Fix schema using `schema show` and init commands — no domain clarification questions are generated.
 
 ## Standard Autonomous Flow (Post-Approval)
 1. `go run ./cmd/feature-dev reconcile`
@@ -49,7 +59,9 @@ When strict validation fails, workflow enters `CLARIFICATION_NEEDED`. The CLI wr
 
 | reason | Action |
 |--------|--------|
-| `planning_bundle_incomplete` | Complete draft bundle files |
+| `planning_bundle_incomplete` | `plan draft init`, then `task preview --json` |
+| `schema_fix_required` | `schema show <artifact> --json`, fix JSON, rerun preview |
+| `planning_in_progress` | complete bundle + tasks, preview, submit |
 | `plan_needs_clarification` | `plan clarify --json`, ask user, fix, resubmit |
 | `tasks_awaiting_approval` | Present review, wait for approval |
 | `plan_approved_ready` | reconcile + execute-loop |

@@ -60,10 +60,17 @@ func BuildAgentHint(workspaceRoot string) (AgentHint, error) {
 	}
 	hint.RepositoriesCount = len(repos)
 
-	tasks, err := LoadTasks(workspaceRoot)
+	taskLoad, err := LoadTasksWithReport(workspaceRoot)
 	if err != nil {
 		return hint, err
 	}
+	if !taskLoad.Report.Valid {
+		hint.Reason = "schema_fix_required"
+		hint.SuggestedNextCommand = "feature-dev schema show tasks --json && feature-dev task init --force"
+		hint.SuggestedPrompt = "Fix tasks.json structure using schema show output, then run task preview --json before plan submit."
+		return hint, nil
+	}
+	tasks := taskLoad.Tasks
 	hint.TotalTasks = len(tasks)
 	hint.TaskCountByStatus = summarizeTaskStatuses(tasks)
 
@@ -80,8 +87,26 @@ func BuildAgentHint(workspaceRoot string) (AgentHint, error) {
 	hint.ImplementedTasks = append(taskIDsByStatus(tasks, StatusImplemented), taskIDsByStatus(tasks, StatusVerifying)...)
 	sort.Strings(hint.ImplementedTasks)
 
+	if structuralReport, ok := loadLastStructuralValidation(workspaceRoot); ok {
+		hint.Reason = "schema_fix_required"
+		hint.SuggestedNextCommand = structuralFixCommand(structuralReport)
+		hint.SuggestedPrompt = "Fix JSON structure errors in planning artifacts using schema show and init commands, then run feature-dev task preview --json."
+		return hint, nil
+	}
+
 	if RequiresPlanApproval(ws) {
 		switch ws.WorkflowStatus {
+		case WorkflowPlanning:
+			if report, ok := loadLastValidationReport(workspaceRoot); ok && HasStructuralErrors(report) {
+				hint.Reason = "schema_fix_required"
+				hint.SuggestedNextCommand = structuralFixCommand(report)
+				hint.SuggestedPrompt = "Fix JSON structure errors before domain clarification. Use schema show and plan draft init / task init, then task preview --json."
+				return hint, nil
+			}
+			hint.Reason = "planning_in_progress"
+			hint.SuggestedNextCommand = "feature-dev plan draft init && feature-dev task init && feature-dev task preview --json"
+			hint.SuggestedPrompt = "Complete the planning bundle and tasks.json, validate with task preview, then plan submit --from-tasks."
+			return hint, nil
 		case WorkflowClarificationNeeded:
 			hint.Reason = "plan_needs_clarification"
 			hint.SuggestedNextCommand = "feature-dev plan clarify --json"
@@ -155,13 +180,13 @@ func BuildAgentHint(workspaceRoot string) (AgentHint, error) {
 		hint.SuggestedPrompt = "Use feature-dev command, run discover, analyze repositories, write .feature/tasks/tasks.json, then plan submit --from-tasks."
 	case hint.TotalTasks == 0:
 		hint.Reason = "no_tasks_defined"
-		hint.SuggestedNextCommand = "feature-dev task add T001 \"Define first feature slice\""
-		hint.SuggestedPrompt = "Analyze PLAN.md and repositories, write .feature/tasks/tasks.json with repo assignments and dependencies, then run plan submit --from-tasks."
+		hint.SuggestedNextCommand = "feature-dev plan draft init && feature-dev task init"
+		hint.SuggestedPrompt = "Scaffold planning draft bundle and tasks.json from CLI templates, fill in domain content from PLAN.md, then run task preview --json and plan submit --from-tasks."
 	case hint.TotalTasks > 0 && ws.CurrentPlanRevision == 0:
 		if !Exists(PlanDraftRequirementsPath(workspaceRoot)) {
 			hint.Reason = "planning_bundle_incomplete"
-			hint.SuggestedNextCommand = "feature-dev task preview --json"
-			hint.SuggestedPrompt = "Write the planning bundle under .feature/plans/draft/ (requirements, assumptions, risks, impact, repo-analysis) and tasks.json, then plan submit --from-tasks."
+			hint.SuggestedNextCommand = "feature-dev plan draft init && feature-dev task preview --json"
+			hint.SuggestedPrompt = "Scaffold the planning bundle with plan draft init, complete domain content, validate with task preview, then plan submit --from-tasks."
 		} else {
 			hint.Reason = "tasks_need_submit"
 			hint.SuggestedNextCommand = "feature-dev plan submit --from-tasks"
@@ -290,6 +315,45 @@ func taskIDsByStatus(tasks []Task, status TaskStatus) []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+func loadLastValidationReport(workspaceRoot string) (PlanValidationReport, bool) {
+	path := PlanDraftLastValidationPath(workspaceRoot)
+	if !Exists(path) {
+		return PlanValidationReport{}, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return PlanValidationReport{}, false
+	}
+	var report PlanValidationReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		return PlanValidationReport{}, false
+	}
+	return report, true
+}
+
+func loadLastStructuralValidation(workspaceRoot string) (PlanValidationReport, bool) {
+	report, ok := loadLastValidationReport(workspaceRoot)
+	if !ok || !HasStructuralErrors(report) {
+		return PlanValidationReport{}, false
+	}
+	return report, true
+}
+
+func structuralFixCommand(report PlanValidationReport) string {
+	for _, err := range report.Errors {
+		if !IsStructuralErrorCode(err.Code) {
+			continue
+		}
+		switch err.Code {
+		case "invalid_task_json", "invalid_verification_type", "invalid_tasks_wrapper":
+			return "feature-dev schema show tasks --json && feature-dev task init --force"
+		case "invalid_draft_wrapper", "draft_bundle_load_error":
+			return "feature-dev schema show requirements --json && feature-dev plan draft init --force"
+		}
+	}
+	return "feature-dev schema list --json && feature-dev plan draft init --force && feature-dev task init --force"
 }
 
 func remainingTaskCount(tasks []Task) int {

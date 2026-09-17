@@ -168,7 +168,6 @@ func LoadPlanningDraftBundle(workspaceRoot string) (PlanningDraftBundle, error) 
 			continue
 		}
 		if !Exists(l.path) {
-			bundle.LoadErrors = append(bundle.LoadErrors, fmt.Errorf("missing draft file: %s", l.path))
 			continue
 		}
 		if err := l.fn(); err != nil {
@@ -389,9 +388,7 @@ func ValidateDraftBundleEarly(workspaceRoot string, bundle PlanningDraftBundle) 
 	}
 	for _, err := range bundle.LoadErrors {
 		report.Valid = false
-		report.Errors = append(report.Errors, PlanValidationIssue{
-			Level: "error", Code: "draft_bundle_load_error", Message: err.Error(),
-		})
+		report.Errors = append(report.Errors, translateDraftLoadError(err))
 	}
 	if report.Valid {
 		report.Checks["draft_bundle"] = "PASS"

@@ -26,6 +26,34 @@ Use this skill when you want the agent to run feature work through the feature-d
 
 ## Procedure
 
+### Recommended agent flow
+
+Default end-to-end path. Run from workspace root; use `go run ./cmd/feature-dev` or `feature-dev` if installed.
+
+```bash
+go run ./cmd/feature-dev init && go run ./cmd/feature-dev discover
+go run ./cmd/feature-dev plan draft init
+go run ./cmd/feature-dev task init
+# Edit .feature/plans/draft/* and .feature/tasks/tasks.json with domain content from PLAN.md
+go run ./cmd/feature-dev schema show tasks --json   # if unsure about JSON shape
+go run ./cmd/feature-dev task preview --json        # always before submit
+go run ./cmd/feature-dev plan submit --from-tasks
+go run ./cmd/feature-dev review --json
+# Wait for explicit user approval
+go run ./cmd/feature-dev approve
+go run ./cmd/feature-dev reconcile && go run ./cmd/feature-dev execute-loop --json
+# On awaiting_code_changes: edit code → implement <task-id> → execute-loop again
+# When all tasks DONE:
+go run ./cmd/feature-dev finalize --json
+```
+
+Rules:
+- Always run `task preview --json` before `plan submit --from-tasks`.
+- **Structural** errors (bad JSON shape) → `schema show <artifact> --json`, fix files or rerun `plan draft init` / `task init` (workflow stays `PLANNING`).
+- **Domain** errors (missing requirements, repo ownership) → `plan clarify --json`, ask user, fix, resubmit.
+- During execution: after code changes run `implement <task-id>` before the next `execute-loop`.
+- Each cycle: `go run ./cmd/feature-dev agent-hint --json` and follow `suggested_next_command`.
+
 ### 1) Bootstrap
 Run:
 - `go run ./cmd/feature-dev init`
@@ -43,29 +71,39 @@ Allowed paths during planning: `.feature/**`, `PLAN.md`, planning/review artifac
 - Read `PLAN.md`; extract requirements and acceptance criteria.
 - Confirm repositories via `discover` and `.feature/repositories.json`.
 
-#### 2b) Repository and impact analysis
-- Inspect each relevant repository (structure, modules, APIs, tests).
-- Write `.feature/plans/draft/repo-analysis.json` with evidence paths per repo.
-- Write `.feature/plans/draft/impact.json` with affected repos and change areas.
+#### 2b) Scaffold planning artifacts (CLI-first)
+Run:
+- `go run ./cmd/feature-dev plan draft init`
+- `go run ./cmd/feature-dev task init`
 
-#### 2c) Requirements, assumptions, risks
-- Write `.feature/plans/draft/requirements.json` (authoritative R001… list).
-- Write `.feature/plans/draft/assumptions.json` (confidence, impact, evidence).
-- Write `.feature/plans/draft/risks.json` (level, type, mitigation).
+Use `go run ./cmd/feature-dev schema show <artifact> --json` to inspect the canonical contract for any file (`tasks`, `requirements`, `assumptions`, `risks`, `impact`, `repo-analysis`). Do not reverse-engineer JSON shape from source code.
+
+`tasks.json` must be a **top-level JSON array** (not `{"tasks": [...]}`). Each task's `verification` field must be an array of objects with a `command` field, e.g. `[{"command": "go test ./..."}]`.
+
+#### 2c) Repository and impact analysis
+- Inspect each relevant repository (structure, modules, APIs, tests).
+- Edit `.feature/plans/draft/repo-analysis.json` with evidence paths per repo.
+- Edit `.feature/plans/draft/impact.json` with affected repos and change areas.
+
+#### 2d) Requirements, assumptions, risks
+- Edit `.feature/plans/draft/requirements.json` (authoritative R001… list).
+- Edit `.feature/plans/draft/assumptions.json` (confidence, impact, evidence).
+- Edit `.feature/plans/draft/risks.json` (level, type, mitigation).
 - Optional: `.feature/plans/draft/workspace-verify.json` for cross-repo integration commands.
 
-Use templates under [assets/](assets/).
+Reference templates under [assets/](assets/) match the embedded CLI templates.
 
-#### 2d) Task graph
-- Write [`.feature/tasks/tasks.json`](assets/task-dag-template.json) with:
+#### 2e) Task graph
+- Edit `.feature/tasks/tasks.json` with:
   - `id`, `title`, `repository`, `dependencies`, `verification`
   - `repository_rationale`, `ownership_confidence`, `requirement_ids`, `planned_verification`
 - Run `go run ./cmd/feature-dev graph`
-- Run `go run ./cmd/feature-dev task preview --json`
+- Run `go run ./cmd/feature-dev task preview --json` (or `plan validate --json`)
 
-#### 2e) Submit, clarify, review, approve
+#### 2f) Submit, clarify, review, approve
 - `go run ./cmd/feature-dev plan submit --from-tasks`
-- On failure → `go run ./cmd/feature-dev plan clarify --json` → present questions → **wait for user** → update draft bundle → resubmit
+- On **structural** validation failure (bad JSON shape) → fix using `schema show` and `plan draft init` / `task init`, then `task preview --json` (workflow stays `PLANNING`)
+- On **domain** validation failure → `go run ./cmd/feature-dev plan clarify --json` → present questions → **wait for user** → update draft bundle → resubmit
 - On pass → `go run ./cmd/feature-dev review --json` + `graph`
 - Present tasks.json-first plus requirements, assumptions, risks, impact, and warnings
 - Wait for explicit approval → `go run ./cmd/feature-dev approve`
@@ -81,13 +119,15 @@ Planning rules:
 3. Do not guess repo ownership, requirement deferrals, or risk mitigations when validation fails — ask the user.
 4. Do not start implementation until `workflow_status: APPROVED`.
 
-### 2f) Agent-hint routing
+### 2g) Agent-hint routing
 
 | reason | Agent action |
 |--------|----------------|
 | `repositories_not_discovered` | run discover, then planning |
-| `no_tasks_defined` | write tasks.json + draft bundle |
-| `planning_bundle_incomplete` | complete draft bundle files |
+| `no_tasks_defined` | `plan draft init` + `task init`, then fill domain content |
+| `planning_bundle_incomplete` | `plan draft init`, then `task preview --json` |
+| `schema_fix_required` | `schema show <artifact> --json`, fix JSON shape, rerun `task preview --json` |
+| `planning_in_progress` | complete draft bundle + tasks, `task preview --json`, then submit |
 | `tasks_need_submit` | `plan submit --from-tasks` |
 | `task_plan_invalid` / `plan_needs_clarification` | `plan clarify --json`, ask user, fix, resubmit |
 | `tasks_awaiting_approval` | present review, wait for approval |
@@ -171,11 +211,13 @@ For every cycle, report:
 ```text
 Use feature-dev-orchestrator to implement PLAN.md.
 
-Do deep planning first: inspect relevant repositories, write the planning bundle under
-.feature/plans/draft/ (requirements, assumptions, risks, impact, repo-analysis), and
-write .feature/tasks/tasks.json with a valid DAG. Do not modify production code during planning.
+Do deep planning first: run plan draft init and task init, inspect relevant repositories,
+fill the planning bundle under .feature/plans/draft/ (requirements, assumptions, risks,
+impact, repo-analysis), and edit .feature/tasks/tasks.json with a valid DAG. Use
+schema show for any JSON contract questions. Do not modify production code during planning.
 
 Then run:
+  feature-dev task preview --json
   feature-dev plan submit --from-tasks
   feature-dev review --json
   feature-dev graph

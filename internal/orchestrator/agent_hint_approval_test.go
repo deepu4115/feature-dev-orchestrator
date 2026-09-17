@@ -58,7 +58,7 @@ func TestAgentHint_TasksNeedSubmit(t *testing.T) {
 	if hint.Reason != "planning_bundle_incomplete" {
 		t.Fatalf("expected planning_bundle_incomplete, got %s", hint.Reason)
 	}
-	if hint.SuggestedNextCommand != "feature-dev task preview --json" {
+	if hint.SuggestedNextCommand != "feature-dev plan draft init && feature-dev task preview --json" {
 		t.Fatalf("unexpected next command: %s", hint.SuggestedNextCommand)
 	}
 }

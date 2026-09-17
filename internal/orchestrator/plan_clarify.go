@@ -47,6 +47,9 @@ func BuildClarificationRequest(report PlanValidationReport, revisionAttempted in
 	seen := map[string]bool{}
 	qNum := 1
 	for _, err := range report.Errors {
+		if IsStructuralErrorCode(err.Code) {
+			continue
+		}
 		if seen[err.Code] {
 			continue
 		}
@@ -234,6 +237,10 @@ func handleValidationFailure(workspaceRoot string, ws *WorkflowState, report Pla
 	if err := WriteLastValidationReport(workspaceRoot, report); err != nil {
 		return err
 	}
-	ws.WorkflowStatus = WorkflowClarificationNeeded
+	if HasStructuralErrors(report) {
+		ws.WorkflowStatus = WorkflowPlanning
+	} else {
+		ws.WorkflowStatus = WorkflowClarificationNeeded
+	}
 	return SaveWorkflowState(workspaceRoot, *ws)
 }

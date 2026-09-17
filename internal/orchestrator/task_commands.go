@@ -14,6 +14,7 @@ func BuildTaskCommand() *cobra.Command {
 		Use:   "task",
 		Short: "Manage workspace tasks",
 	}
+	cmd.AddCommand(BuildTaskInitCommand())
 	cmd.AddCommand(BuildAddTaskCommand())
 	cmd.AddCommand(BuildListTasksCommand())
 	cmd.AddCommand(BuildReadyTaskListCommand())

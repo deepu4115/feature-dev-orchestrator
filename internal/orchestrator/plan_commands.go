@@ -68,17 +68,23 @@ func SubmitPlan(workspaceRoot string, opts SubmitPlanOptions) (SubmitPlanResult,
 			return SubmitPlanResult{}, err
 		}
 	case opts.FromTasks:
-		sourceTasks, err = LoadTasks(workspaceRoot)
+		taskLoad, err := LoadTasksWithReport(workspaceRoot)
 		if err != nil {
 			return SubmitPlanResult{}, err
 		}
+		sourceTasks = taskLoad.Tasks
 		bundle, err := LoadPlanningDraftBundle(workspaceRoot)
 		if err != nil {
 			return SubmitPlanResult{}, err
 		}
-		taskReport, err := ValidateTaskPlan(workspaceRoot, sourceTasks, true)
-		if err != nil {
-			return SubmitPlanResult{}, err
+		var taskReport PlanValidationReport
+		if !taskLoad.Report.Valid {
+			taskReport = taskLoad.Report
+		} else {
+			taskReport, err = ValidateTaskPlan(workspaceRoot, sourceTasks, true)
+			if err != nil {
+				return SubmitPlanResult{}, err
+			}
 		}
 		bundleEarly := ValidateDraftBundleEarly(workspaceRoot, bundle)
 		earlyReport := MergeValidationReports(taskReport, bundleEarly)
@@ -233,13 +239,19 @@ func PreviewTaskPlan(workspaceRoot string) (PlanReviewJSON, PlanDocument, PlanVa
 	if err != nil {
 		return PlanReviewJSON{}, PlanDocument{}, PlanValidationReport{}, err
 	}
-	tasks, err := LoadTasks(workspaceRoot)
+	taskLoad, err := LoadTasksWithReport(workspaceRoot)
 	if err != nil {
 		return PlanReviewJSON{}, PlanDocument{}, PlanValidationReport{}, err
 	}
-	taskReport, err := ValidateTaskPlan(workspaceRoot, tasks, true)
-	if err != nil {
-		return PlanReviewJSON{}, PlanDocument{}, PlanValidationReport{}, err
+	tasks := taskLoad.Tasks
+	var taskReport PlanValidationReport
+	if !taskLoad.Report.Valid {
+		taskReport = taskLoad.Report
+	} else {
+		taskReport, err = ValidateTaskPlan(workspaceRoot, tasks, true)
+		if err != nil {
+			return PlanReviewJSON{}, PlanDocument{}, PlanValidationReport{}, err
+		}
 	}
 	bundle, _ := LoadPlanningDraftBundle(workspaceRoot)
 	bundleEarly := ValidateDraftBundleEarly(workspaceRoot, bundle)
@@ -287,9 +299,47 @@ func BuildPlanCommand() *cobra.Command {
 		Short: "Manage feature implementation plans",
 	}
 	plan.AddCommand(buildPlanSubmitCommand())
+	plan.AddCommand(BuildPlanDraftInitCommand())
+	plan.AddCommand(buildPlanValidateCommand())
 	plan.AddCommand(buildPlanClarifyCommand())
 	plan.AddCommand(buildPlanClarifyRecordCommand())
 	return plan
+}
+
+func buildPlanValidateCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "validate",
+		Aliases: []string{"check"},
+		Short:   "Validate tasks and planning draft bundle before submit (alias for task preview)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workspaceRoot, err := ResolveWorkspaceRoot()
+			if err != nil {
+				return err
+			}
+			jsonFlag, _ := cmd.Flags().GetBool("json")
+			payload, _, report, err := PreviewTaskPlan(workspaceRoot)
+			if err != nil {
+				return err
+			}
+			if jsonFlag {
+				out := map[string]any{
+					"valid":  report.Valid,
+					"report": report,
+					"review": payload,
+				}
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(out)
+			}
+			fmt.Printf("valid: %t\n", report.Valid)
+			for _, e := range report.Errors {
+				fmt.Printf("- [%s] %s\n", e.Code, e.Message)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().Bool("json", false, "Emit validation report as JSON")
+	return cmd
 }
 
 func buildPlanSubmitCommand() *cobra.Command {

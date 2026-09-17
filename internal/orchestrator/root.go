@@ -24,6 +24,7 @@ func BuildRootCommand() *cobra.Command {
 	root.AddCommand(BuildStatusCommand())
 	root.AddCommand(BuildAgentHintCommand())
 	root.AddCommand(BuildPlanCommand())
+	root.AddCommand(BuildSchemaCommand())
 	root.AddCommand(BuildReviewCommand())
 	root.AddCommand(BuildApproveCommand())
 	root.AddCommand(BuildRejectCommand())
