@@ -7,11 +7,14 @@ import (
 )
 
 var structuralErrorCodes = map[string]bool{
-	"invalid_task_json":       true,
+	"invalid_task_json":         true,
 	"invalid_verification_type": true,
-	"invalid_tasks_wrapper":   true,
-	"invalid_draft_wrapper":   true,
-	"draft_bundle_load_error": true,
+	"invalid_tasks_wrapper":     true,
+	"invalid_draft_wrapper":     true,
+	"draft_bundle_load_error":   true,
+	"invalid_repository":        true,
+	"unknown_requirement_id":    true,
+	"verification_command_unavailable": true,
 }
 
 func IsStructuralErrorCode(code string) bool {

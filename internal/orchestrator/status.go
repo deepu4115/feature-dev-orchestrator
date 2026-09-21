@@ -21,6 +21,9 @@ type WorkspaceStatus struct {
 	CompletionReady       bool               `json:"completion_ready"`
 	Finalization          FinalizationStatus `json:"finalization"`
 	FinalGates            []string           `json:"final_gates"`
+	ActiveTaskID          string             `json:"active_task_id,omitempty"`
+	SchedulingPausedReason string            `json:"scheduling_paused_reason,omitempty"`
+	Invariants            *InvariantReport   `json:"invariants,omitempty"`
 }
 
 func ApprovalRequired(ws WorkflowState) bool {
@@ -61,19 +64,23 @@ func BuildWorkspaceStatus(workspaceRoot string) (WorkspaceStatus, error) {
 	finalization := DeriveFinalizationStatus(ws)
 	completed := ws.WorkflowStatus == WorkflowCompleted
 	completionReady := completed || (done == total && total > 0 && (ws.WorkflowStatus == WorkflowVerifying || allTasksInStatus(tasks, StatusDone)))
+	inv, _ := CheckWorkspaceInvariants(workspaceRoot)
 
 	return WorkspaceStatus{
-		Workspace:            workspaceRoot,
-		FeatureDir:           ResolveFeatureDir(workspaceRoot),
-		WorkflowStatus:       ws.WorkflowStatus,
-		CurrentPlanRevision:  ws.CurrentPlanRevision,
-		ApprovedPlanRevision: ws.ApprovedPlanRevision,
-		ApprovalRequired:     ApprovalRequired(ws),
-		TasksDone:            done,
-		TasksTotal:           total,
-		Completed:            completed,
-		CompletionReady:      completionReady,
-		Finalization:         finalization,
-		FinalGates:           []string{"traceability-check", "verify-cross-repo", "finalize"},
+		Workspace:              workspaceRoot,
+		FeatureDir:             ResolveFeatureDir(workspaceRoot),
+		WorkflowStatus:         ws.WorkflowStatus,
+		CurrentPlanRevision:    ws.CurrentPlanRevision,
+		ApprovedPlanRevision:   ws.ApprovedPlanRevision,
+		ApprovalRequired:       ApprovalRequired(ws),
+		TasksDone:              done,
+		TasksTotal:             total,
+		Completed:              completed,
+		CompletionReady:        completionReady,
+		Finalization:           finalization,
+		FinalGates:             []string{"traceability-check", "verify-cross-repo", "finalize"},
+		ActiveTaskID:           ws.ActiveTaskID,
+		SchedulingPausedReason: ws.SchedulingPausedReason,
+		Invariants:             &inv,
 	}, nil
 }

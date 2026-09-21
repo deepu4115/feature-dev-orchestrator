@@ -10,15 +10,61 @@ import (
 )
 
 type FinalizeResult struct {
-	Completed           bool                  `json:"completed"`
-	WorkflowStatus      WorkflowStatus        `json:"workflow_status"`
-	CompletionReady     bool                  `json:"completion_ready"`
-	ApprovalRequired    bool                  `json:"approval_required"`
-	Finalization        FinalizationStatus    `json:"finalization"`
-	ApprovedPlanRevision *int                 `json:"approved_plan_revision,omitempty"`
-	Traceability        TraceabilityReport    `json:"traceability"`
-	CrossRepoVerify     CrossRepoVerifyReport `json:"cross_repo_verify"`
-	StoppedReason       string                `json:"stopped_reason,omitempty"`
+	Completed            bool                  `json:"completed"`
+	WorkflowStatus       WorkflowStatus        `json:"workflow_status"`
+	CompletionReady      bool                  `json:"completion_ready"`
+	ApprovalRequired     bool                  `json:"approval_required"`
+	Finalization         FinalizationStatus    `json:"finalization"`
+	ApprovedPlanRevision *int                  `json:"approved_plan_revision,omitempty"`
+	Traceability         TraceabilityReport    `json:"traceability"`
+	CrossRepoVerify      CrossRepoVerifyReport `json:"cross_repo_verify"`
+	StoppedReason        string                `json:"stopped_reason,omitempty"`
+	RemainingTasks       []RemainingTaskInfo   `json:"remaining_tasks,omitempty"`
+}
+
+type RemainingTaskInfo struct {
+	ID              string     `json:"id"`
+	Status          TaskStatus `json:"status"`
+	Blocker         string     `json:"blocker,omitempty"`
+	RecoveryCommand string     `json:"recovery_command,omitempty"`
+	BlockKind       string     `json:"block_kind,omitempty"`
+}
+
+func buildRemainingTasks(tasks []Task) []RemainingTaskInfo {
+	out := make([]RemainingTaskInfo, 0)
+	for _, t := range tasks {
+		if t.Status == StatusDone {
+			continue
+		}
+		info := RemainingTaskInfo{
+			ID:              t.ID,
+			Status:          t.Status,
+			Blocker:         t.BlockedReason,
+			RecoveryCommand: t.RecoveryCommand,
+			BlockKind:       t.BlockKind,
+		}
+		if info.Blocker == "" {
+			info.Blocker = fmt.Sprintf("status is %s", t.Status)
+		}
+		if info.RecoveryCommand == "" {
+			switch t.Status {
+			case StatusBlocked:
+				info.RecoveryCommand = fmt.Sprintf("feature-dev task unblock %s --reason \"manual unblock\"", t.ID)
+			case StatusRework, StatusFailed:
+				info.RecoveryCommand = fmt.Sprintf("feature-dev task resume %s", t.ID)
+			case StatusRunning:
+				info.RecoveryCommand = fmt.Sprintf("feature-dev task recover %s", t.ID)
+			case StatusReviewPending, StatusPlanned, StatusDraft:
+				info.RecoveryCommand = "feature-dev reconcile"
+			case StatusReady:
+				info.RecoveryCommand = fmt.Sprintf("feature-dev execute-next --task %s", t.ID)
+			case StatusImplemented, StatusVerifying:
+				info.RecoveryCommand = fmt.Sprintf("feature-dev verify %s", t.ID)
+			}
+		}
+		out = append(out, info)
+	}
+	return out
 }
 
 func MaybeAutoCompleteFeature(workspaceRoot string, timeoutSeconds int) (FinalizeResult, error) {
@@ -34,6 +80,7 @@ func MaybeAutoCompleteFeature(workspaceRoot string, timeoutSeconds int) (Finaliz
 	if !allTasksInStatus(tasks, StatusDone) {
 		result.StoppedReason = "not_all_tasks_done"
 		result.WorkflowStatus = ws.WorkflowStatus
+		result.RemainingTasks = buildRemainingTasks(tasks)
 		return result, fmt.Errorf("not all tasks are DONE")
 	}
 	if ws.WorkflowStatus != WorkflowApproved && ws.WorkflowStatus != WorkflowExecuting &&
@@ -112,6 +159,9 @@ func BuildFinalizeCommand() *cobra.Command {
 			}
 			if err != nil {
 				fmt.Printf("finalize stopped: %s\n", result.StoppedReason)
+				for _, rem := range result.RemainingTasks {
+					fmt.Printf("- %s [%s]: %s -> %s\n", rem.ID, rem.Status, rem.Blocker, rem.RecoveryCommand)
+				}
 				return err
 			}
 			fmt.Printf("Workflow: %s\n", result.WorkflowStatus)

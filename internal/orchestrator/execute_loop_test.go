@@ -64,8 +64,8 @@ func TestExecuteLoopRespectsVerifyFailureBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecuteLoop returned error: %v", err)
 	}
-	if result.StoppedReason != "verify_failure_budget_reached" {
-		t.Fatalf("expected verify_failure_budget_reached, got %s", result.StoppedReason)
+	if result.StoppedReason != "awaiting_rework" {
+		t.Fatalf("expected awaiting_rework, got %s", result.StoppedReason)
 	}
 	if result.VerifyFailures != 1 {
 		t.Fatalf("expected verify failures 1, got %d", result.VerifyFailures)

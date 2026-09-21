@@ -124,6 +124,26 @@ func ReadyTasks(workspaceRoot string, tasks []Task) ([]Task, error) {
 	return ready, nil
 }
 
+// SchedulableTasks returns dependency-ready tasks that can start given workflow lease/active constraints.
+func SchedulableTasks(workspaceRoot string, tasks []Task) ([]Task, error) {
+	ready, err := ReadyTasks(workspaceRoot, tasks)
+	if err != nil {
+		return nil, err
+	}
+	ws, err := LoadWorkflowState(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	if ws.SchedulingPausedReason != "" {
+		return []Task{}, nil
+	}
+	if HasActiveTask(tasks) || LeaseHeld(ws, now) {
+		return []Task{}, nil
+	}
+	return ready, nil
+}
+
 func SaveTasks(workspaceRoot string, tasks []Task) error {
 	path := TaskStoragePath(workspaceRoot)
 	if err := EnsureDir(filepath.Dir(path)); err != nil {

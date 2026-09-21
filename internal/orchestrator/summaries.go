@@ -22,8 +22,10 @@ func AppendTaskSummary(workspaceRoot string, task Task, event, message string) e
 		TaskID:     task.ID,
 		Repository: task.Repository,
 		Status:     task.Status,
+		NextStatus: task.Status,
 		Event:      strings.TrimSpace(event),
 		Message:    strings.TrimSpace(message),
+		Reason:     strings.TrimSpace(message),
 	}
 	if entry.Event == "" {
 		entry.Event = "update"
@@ -31,7 +33,19 @@ func AppendTaskSummary(workspaceRoot string, task Task, event, message string) e
 	if entry.Message == "" {
 		entry.Message = "task updated"
 	}
+	return appendTaskSummaryRecord(workspaceRoot, entry)
+}
 
+func appendTaskSummaryRecord(workspaceRoot string, entry TaskSummaryRecord) error {
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = time.Now().UTC()
+	}
+	if entry.Event == "" {
+		entry.Event = "update"
+	}
+	if entry.Message == "" {
+		entry.Message = "task updated"
+	}
 	line, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("marshal summary entry: %w", err)

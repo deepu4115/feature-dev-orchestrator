@@ -101,7 +101,29 @@ type WorkflowState struct {
 	WorkflowStatus           WorkflowStatus         `json:"workflow_status"`
 	ApprovalHistory          []ApprovalHistoryEntry `json:"approval_history,omitempty"`
 	CoverageDeferralReason   string                 `json:"coverage_deferral_reason,omitempty"`
+	ActiveTaskID             string                 `json:"active_task_id,omitempty"`
+	ActiveLeaseID            string                 `json:"active_lease_id,omitempty"`
+	ActiveLeaseExpiresAt     *time.Time             `json:"active_lease_expires_at,omitempty"`
+	ActiveClaimedAt          *time.Time             `json:"active_claimed_at,omitempty"`
+	ActiveClaimedBy          string                 `json:"active_claimed_by,omitempty"`
+	SchedulingPausedReason   string                 `json:"scheduling_paused_reason,omitempty"`
 	UpdatedAt                time.Time              `json:"updated_at"`
+}
+
+const (
+	BlockKindDependency  = "dependency"
+	BlockKindStaleRunning = "stale_running"
+	BlockKindMissingRepo = "missing_repo"
+	BlockKindManual      = "manual"
+	BlockKindLeaseExpired = "lease_expired"
+)
+
+type BlockMeta struct {
+	Reason          string    `json:"blocked_reason,omitempty"`
+	BlockedBy       []string  `json:"blocked_by,omitempty"`
+	BlockedAt       time.Time `json:"blocked_at,omitempty"`
+	RecoveryCommand string    `json:"recovery_command,omitempty"`
+	BlockKind       string    `json:"block_kind,omitempty"`
 }
 
 type TaskStatus string
@@ -143,6 +165,11 @@ type Task struct {
 	OwnershipConfidence string            `json:"ownership_confidence,omitempty" yaml:"ownership_confidence,omitempty"`
 	RequirementIDs     []string           `json:"requirement_ids,omitempty" yaml:"requirement_ids,omitempty"`
 	PlannedVerification []string          `json:"planned_verification,omitempty" yaml:"planned_verification,omitempty"`
+	BlockedReason      string             `json:"blocked_reason,omitempty" yaml:"blocked_reason,omitempty"`
+	BlockedBy          []string           `json:"blocked_by,omitempty" yaml:"blocked_by,omitempty"`
+	BlockedAt          *time.Time         `json:"blocked_at,omitempty" yaml:"blocked_at,omitempty"`
+	RecoveryCommand    string             `json:"recovery_command,omitempty" yaml:"recovery_command,omitempty"`
+	BlockKind          string             `json:"block_kind,omitempty" yaml:"block_kind,omitempty"`
 	UpdatedAt          time.Time          `json:"updated_at,omitempty" yaml:"updated_at,omitempty"`
 }
 
@@ -175,12 +202,19 @@ type ContextPayload struct {
 }
 
 type TaskSummaryRecord struct {
-	Timestamp  time.Time  `json:"timestamp" yaml:"timestamp"`
-	TaskID     string     `json:"task_id" yaml:"task_id"`
-	Repository string     `json:"repository" yaml:"repository"`
-	Status     TaskStatus `json:"status" yaml:"status"`
-	Event      string     `json:"event" yaml:"event"`
-	Message    string     `json:"message" yaml:"message"`
+	Timestamp         time.Time  `json:"timestamp" yaml:"timestamp"`
+	TaskID            string     `json:"task_id" yaml:"task_id"`
+	Repository        string     `json:"repository" yaml:"repository"`
+	Status            TaskStatus `json:"status" yaml:"status"`
+	PreviousStatus    TaskStatus `json:"previous_status,omitempty" yaml:"previous_status,omitempty"`
+	NextStatus        TaskStatus `json:"next_status,omitempty" yaml:"next_status,omitempty"`
+	Event             string     `json:"event" yaml:"event"`
+	Message           string     `json:"message" yaml:"message"`
+	Reason            string     `json:"reason,omitempty" yaml:"reason,omitempty"`
+	Actor             string     `json:"actor,omitempty" yaml:"actor,omitempty"`
+	Command           string     `json:"command,omitempty" yaml:"command,omitempty"`
+	WorkflowRevision  int        `json:"workflow_revision,omitempty" yaml:"workflow_revision,omitempty"`
+	VerifierCommand   string     `json:"verifier_command,omitempty" yaml:"verifier_command,omitempty"`
 }
 
 func DefaultConfig() WorkspaceConfig {

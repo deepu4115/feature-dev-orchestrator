@@ -25,6 +25,9 @@ func BuildTaskCommand() *cobra.Command {
 	cmd.AddCommand(BuildFailTaskCommand())
 	cmd.AddCommand(BuildTaskExplainCommand())
 	cmd.AddCommand(BuildTaskValidateCommand())
+	cmd.AddCommand(BuildTaskUnblockCommand())
+	cmd.AddCommand(BuildTaskResumeCommand())
+	cmd.AddCommand(BuildTaskRecoverCommand())
 	return cmd
 }
 
@@ -181,20 +184,44 @@ func BuildStartTaskCommand() *cobra.Command {
 				}
 			}
 
-			if tasks[idx].Status != StatusReady {
-				if err := tasks[idx].TransitionTo(StatusReady); err != nil {
-					return err
+			if HasActiveTask(tasks) {
+				for _, a := range ActiveTasks(tasks) {
+					if a.ID != args[0] {
+						return NewCodedError(ErrCodeWorkflowBusy, fmt.Sprintf("task %s is already active", a.ID))
+					}
 				}
 			}
-			if err := tasks[idx].TransitionTo(StatusRunning); err != nil {
+
+			if tasks[idx].Status != StatusReady {
+				tr, err := ApplyTransition(workspaceRoot, tasks, TransitionSpec{
+					TaskID:  args[0],
+					To:      StatusReady,
+					Reason:  "promoted before start",
+					Actor:   "task start",
+					Command: "feature-dev task start",
+					Event:   "task_promoted_ready",
+				})
+				if err != nil {
+					return err
+				}
+				tasks = tr.Tasks
+			}
+			tr, err := ApplyTransition(workspaceRoot, tasks, TransitionSpec{
+				TaskID:     args[0],
+				To:         StatusRunning,
+				Reason:     "task start claimed execution",
+				Actor:      "task start",
+				Command:    "feature-dev task start",
+				Event:      "task_started",
+				Message:    "task moved to RUNNING",
+				ClaimLease: true,
+				ClearBlock: true,
+			})
+			if err != nil {
 				return err
 			}
-			if err := SaveTasks(workspaceRoot, tasks); err != nil {
-				return err
-			}
-			if err := AppendTaskSummary(workspaceRoot, tasks[idx], "task_started", "task moved to RUNNING"); err != nil {
-				return err
-			}
+			_ = SyncWorkflowFromTasks(workspaceRoot)
+			_ = tr
 			fmt.Printf("task %s is now RUNNING\n", args[0])
 			return nil
 		},
@@ -218,13 +245,17 @@ func ImplementTask(workspaceRoot string, taskID string) error {
 	if tasks[idx].Status != StatusRunning {
 		return fmt.Errorf("task %s must be RUNNING to mark implemented (current: %s)", taskID, tasks[idx].Status)
 	}
-	if err := tasks[idx].TransitionTo(StatusImplemented); err != nil {
-		return err
-	}
-	if err := SaveTasks(workspaceRoot, tasks); err != nil {
-		return err
-	}
-	if err := AppendTaskSummary(workspaceRoot, tasks[idx], "task_implemented", "task moved to IMPLEMENTED"); err != nil {
+	_, err = ApplyTransition(workspaceRoot, tasks, TransitionSpec{
+		TaskID:         taskID,
+		To:             StatusImplemented,
+		Reason:         "implementation marked complete",
+		Actor:          "task implement",
+		Command:        "feature-dev task implement",
+		Event:          "task_implemented",
+		Message:        "task moved to IMPLEMENTED",
+		HeartbeatLease: true,
+	})
+	if err != nil {
 		return err
 	}
 	_ = SyncWorkflowFromTasks(workspaceRoot)
@@ -272,31 +303,45 @@ func BuildCompleteTaskCommand() *cobra.Command {
 
 			switch tasks[idx].Status {
 			case StatusVerifying:
-				if err := tasks[idx].TransitionTo(StatusDone); err != nil {
+				if _, err := ApplyTransition(workspaceRoot, tasks, TransitionSpec{
+					TaskID: args[0], To: StatusDone, Reason: "task complete",
+					Actor: "task complete", Command: "feature-dev task complete",
+					Event: "task_completed", Message: "task moved to DONE", ClearLease: true, ClearBlock: true,
+				}); err != nil {
 					return err
 				}
 			case StatusImplemented:
-				if err := tasks[idx].TransitionTo(StatusVerifying); err != nil {
+				tr, err := ApplyTransition(workspaceRoot, tasks, TransitionSpec{
+					TaskID: args[0], To: StatusVerifying, Reason: "complete via verifying",
+					Actor: "task complete", Command: "feature-dev task complete",
+					Event: "verification_started", HeartbeatLease: true,
+				})
+				if err != nil {
 					return err
 				}
-				if err := tasks[idx].TransitionTo(StatusDone); err != nil {
+				tasks = tr.Tasks
+				if _, err := ApplyTransition(workspaceRoot, tasks, TransitionSpec{
+					TaskID: args[0], To: StatusDone, Reason: "task complete",
+					Actor: "task complete", Command: "feature-dev task complete",
+					Event: "task_completed", Message: "task moved to DONE", ClearLease: true, ClearBlock: true,
+				}); err != nil {
 					return err
 				}
 			default:
 				return fmt.Errorf("task %s must be IMPLEMENTED or VERIFYING to complete", args[0])
 			}
 
-			if err := SaveTasks(workspaceRoot, tasks); err != nil {
+			tasks, err = LoadTasks(workspaceRoot)
+			if err != nil {
 				return err
 			}
 			tasks, unlocked, _ := PromoteTasksAfterCompletion(workspaceRoot, tasks)
 			if len(unlocked) > 0 {
-				_ = SaveTasks(workspaceRoot, tasks)
+				if err := SaveTasks(workspaceRoot, tasks); err != nil {
+					return err
+				}
 			}
 			_ = SyncWorkflowFromTasks(workspaceRoot)
-			if err := AppendTaskSummary(workspaceRoot, tasks[idx], "task_completed", "task moved to DONE"); err != nil {
-				return err
-			}
 			fmt.Printf("task %s is now DONE\n", args[0])
 			return nil
 		},
@@ -393,20 +438,200 @@ func BuildFailTaskCommand() *cobra.Command {
 			if tasks[idx].Status != StatusRunning && tasks[idx].Status != StatusVerifying {
 				return fmt.Errorf("task %s must be RUNNING or VERIFYING to fail", args[0])
 			}
-			if err := tasks[idx].TransitionTo(StatusFailed); err != nil {
-				return err
-			}
-
-			if err := SaveTasks(workspaceRoot, tasks); err != nil {
-				return err
-			}
-			if err := AppendTaskSummary(workspaceRoot, tasks[idx], "task_failed", "task moved to FAILED"); err != nil {
+			if _, err := ApplyTransition(workspaceRoot, tasks, TransitionSpec{
+				TaskID: args[0], To: StatusFailed, Reason: "task failed",
+				Actor: "task fail", Command: "feature-dev task fail",
+				Event: "task_failed", Message: "task moved to FAILED", ClearLease: true,
+			}); err != nil {
 				return err
 			}
 			fmt.Printf("task %s is now FAILED\n", args[0])
 			return nil
 		},
 	}
+	return cmd
+}
+
+func BuildTaskUnblockCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "unblock <task-id>",
+		Short: "Move a BLOCKED task to READY with an audited reason",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workspaceRoot, err := ResolveWorkspaceRoot()
+			if err != nil {
+				return err
+			}
+			reason, _ := cmd.Flags().GetString("reason")
+			force, _ := cmd.Flags().GetBool("force")
+			if strings.TrimSpace(reason) == "" {
+				return fmt.Errorf("--reason is required")
+			}
+			tasks, err := LoadTasks(workspaceRoot)
+			if err != nil {
+				return err
+			}
+			idx := findTaskIndex(tasks, args[0])
+			if idx == -1 {
+				return fmt.Errorf("task %s not found", args[0])
+			}
+			if tasks[idx].Status != StatusBlocked {
+				return fmt.Errorf("task %s is not BLOCKED (status=%s)", args[0], tasks[idx].Status)
+			}
+			if !force {
+				byID := map[string]Task{}
+				for _, t := range tasks {
+					byID[t.ID] = t
+				}
+				for _, dep := range tasks[idx].Dependencies {
+					d, ok := byID[dep]
+					if !ok || d.Status != StatusDone {
+						return fmt.Errorf("dependencies incomplete; use --force to override")
+					}
+				}
+			}
+			if _, err := ApplyTransition(workspaceRoot, tasks, TransitionSpec{
+				TaskID: args[0], To: StatusReady, Reason: reason,
+				Actor: "task unblock", Command: "feature-dev task unblock",
+				Event: "task_unblocked", Message: "task moved to READY", ClearBlock: true, ClearLease: true,
+			}); err != nil {
+				return err
+			}
+			fmt.Printf("task %s unblocked to READY\n", args[0])
+			return nil
+		},
+	}
+	cmd.Flags().String("reason", "", "Reason for unblocking (required)")
+	cmd.Flags().Bool("force", false, "Force unblock even if dependencies are incomplete")
+	return cmd
+}
+
+func BuildTaskResumeCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "resume <task-id>",
+		Short: "Move a REWORK or FAILED task back to READY",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workspaceRoot, err := ResolveWorkspaceRoot()
+			if err != nil {
+				return err
+			}
+			tasks, err := LoadTasks(workspaceRoot)
+			if err != nil {
+				return err
+			}
+			idx := findTaskIndex(tasks, args[0])
+			if idx == -1 {
+				return fmt.Errorf("task %s not found", args[0])
+			}
+			if tasks[idx].Status != StatusRework && tasks[idx].Status != StatusFailed {
+				return fmt.Errorf("task %s must be REWORK or FAILED to resume (status=%s)", args[0], tasks[idx].Status)
+			}
+			if _, err := ApplyTransition(workspaceRoot, tasks, TransitionSpec{
+				TaskID: args[0], To: StatusReady, Reason: "resumed after rework/failure",
+				Actor: "task resume", Command: "feature-dev task resume",
+				Event: "task_resumed", Message: "task moved to READY", ClearBlock: true, ClearLease: true,
+			}); err != nil {
+				return err
+			}
+			fmt.Printf("task %s resumed to READY\n", args[0])
+			return nil
+		},
+	}
+	return cmd
+}
+
+func BuildTaskRecoverCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "recover <task-id>",
+		Short: "Recover an orphaned RUNNING/BLOCKED lease-expired task",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workspaceRoot, err := ResolveWorkspaceRoot()
+			if err != nil {
+				return err
+			}
+			toReady, _ := cmd.Flags().GetBool("to-ready")
+			reason, _ := cmd.Flags().GetString("reason")
+			if strings.TrimSpace(reason) == "" {
+				reason = "recovered orphaned/active task"
+			}
+			tasks, err := LoadTasks(workspaceRoot)
+			if err != nil {
+				return err
+			}
+			idx := findTaskIndex(tasks, args[0])
+			if idx == -1 {
+				return fmt.Errorf("task %s not found", args[0])
+			}
+			target := StatusRework
+			if toReady || tasks[idx].Status == StatusBlocked {
+				target = StatusReady
+			}
+			switch tasks[idx].Status {
+			case StatusRunning:
+				// RUNNING -> BLOCKED first if going to READY isn't direct; RUNNING can go BLOCKED then READY
+				if target == StatusReady {
+					tr, err := ApplyTransition(workspaceRoot, tasks, TransitionSpec{
+						TaskID: args[0], To: StatusBlocked, Reason: reason,
+						Actor: "task recover", Command: "feature-dev task recover",
+						Event: "task_recover_block", SetBlock: &BlockMeta{
+							Reason: reason, BlockKind: BlockKindLeaseExpired,
+							RecoveryCommand: fmt.Sprintf("feature-dev task unblock %s --reason %q", args[0], reason),
+						}, ClearLease: true,
+					})
+					if err != nil {
+						return err
+					}
+					tasks = tr.Tasks
+					if _, err := ApplyTransition(workspaceRoot, tasks, TransitionSpec{
+						TaskID: args[0], To: StatusReady, Reason: reason,
+						Actor: "task recover", Command: "feature-dev task recover",
+						Event: "task_recovered", Message: "task recovered to READY", ClearBlock: true, ClearLease: true,
+					}); err != nil {
+						return err
+					}
+				} else {
+					tr, err := ApplyTransition(workspaceRoot, tasks, TransitionSpec{
+						TaskID: args[0], To: StatusBlocked, Reason: reason,
+						Actor: "task recover", Command: "feature-dev task recover",
+						Event: "task_recover_block", SetBlock: &BlockMeta{
+							Reason: reason, BlockKind: BlockKindLeaseExpired,
+							RecoveryCommand: fmt.Sprintf("feature-dev task resume %s", args[0]),
+						}, ClearLease: true,
+					})
+					if err != nil {
+						return err
+					}
+					_ = tr
+					// Blocked -> cannot go to REWORK directly. Use READY then leave for resume, or fail->rework path.
+					// Prefer READY as recovery landing for orphans.
+					tasks, _ = LoadTasks(workspaceRoot)
+					if _, err := ApplyTransition(workspaceRoot, tasks, TransitionSpec{
+						TaskID: args[0], To: StatusReady, Reason: reason,
+						Actor: "task recover", Command: "feature-dev task recover",
+						Event: "task_recovered", ClearBlock: true, ClearLease: true,
+					}); err != nil {
+						return err
+					}
+				}
+			case StatusBlocked:
+				if _, err := ApplyTransition(workspaceRoot, tasks, TransitionSpec{
+					TaskID: args[0], To: StatusReady, Reason: reason,
+					Actor: "task recover", Command: "feature-dev task recover",
+					Event: "task_recovered", Message: "task recovered to READY", ClearBlock: true, ClearLease: true,
+				}); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("task %s must be RUNNING or BLOCKED to recover (status=%s)", args[0], tasks[idx].Status)
+			}
+			fmt.Printf("task %s recovered to READY\n", args[0])
+			return nil
+		},
+	}
+	cmd.Flags().Bool("to-ready", true, "Recover to READY (default)")
+	cmd.Flags().String("reason", "", "Recovery reason")
 	return cmd
 }
 

@@ -228,6 +228,24 @@ func BuildAgentHint(workspaceRoot string) (AgentHint, error) {
 		hint.Reason = "tasks_blocked_or_waiting"
 		hint.SuggestedNextCommand = "feature-dev reconcile"
 		hint.SuggestedPrompt = "Use feature-dev command, reconcile stale state, fix blocked dependencies, and continue orchestration."
+		for _, t := range tasks {
+			if t.Status == StatusBlocked {
+				if t.RecoveryCommand != "" {
+					hint.SuggestedNextCommand = t.RecoveryCommand
+				} else {
+					hint.SuggestedNextCommand = fmt.Sprintf("feature-dev task unblock %s --reason \"manual unblock\"", t.ID)
+				}
+				break
+			}
+			if t.Status == StatusRework {
+				hint.SuggestedNextCommand = fmt.Sprintf("feature-dev task resume %s", t.ID)
+				break
+			}
+		}
+		wsState, _ := LoadWorkflowState(workspaceRoot)
+		if wsState.SchedulingPausedReason != "" && wsState.ActiveTaskID != "" {
+			hint.SuggestedNextCommand = fmt.Sprintf("feature-dev task recover %s", wsState.ActiveTaskID)
+		}
 	default:
 		if ws.WorkflowStatus == WorkflowCompleted {
 			hint.Reason = "feature_completed"

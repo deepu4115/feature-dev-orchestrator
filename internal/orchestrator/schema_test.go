@@ -22,8 +22,8 @@ func TestInitPlanningDraftFromTemplates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InitPlanningDraftFromTemplates: %v", err)
 	}
-	if len(written) != 5 {
-		t.Fatalf("expected 5 draft files, got %d: %v", len(written), written)
+	if len(written) != 6 {
+		t.Fatalf("expected 6 draft files, got %d: %v", len(written), written)
 	}
 	for _, name := range []string{"requirements.json", "assumptions.json", "risks.json", "impact.json", "repo-analysis.json"} {
 		if !Exists(filepath.Join(PlanDraftDir(workspaceRoot), name)) {

@@ -27,6 +27,7 @@ type ExecuteNextResult struct {
 	Context        *ContextPayload     `json:"context,omitempty"`
 	Verification   *VerificationResult `json:"verification,omitempty"`
 	ReadyQueueSize int                 `json:"ready_queue_size"`
+	ErrorCode      string              `json:"error_code,omitempty"`
 }
 
 type ExecuteLoopOptions struct {
@@ -49,6 +50,11 @@ func ExecuteNext(workspaceRoot string, opts ExecuteNextOptions) (ExecuteNextResu
 		return ExecuteNextResult{}, err
 	}
 
+	before := map[string]Task{}
+	for _, t := range tasks {
+		before[t.ID] = t
+	}
+
 	reconcileReport, err := ReconcileTasks(workspaceRoot, tasks)
 	if err != nil {
 		return ExecuteNextResult{}, err
@@ -57,6 +63,9 @@ func ExecuteNext(workspaceRoot string, opts ExecuteNextOptions) (ExecuteNextResu
 
 	if !opts.DryRun {
 		if err := SaveTasks(workspaceRoot, tasks); err != nil {
+			return ExecuteNextResult{}, err
+		}
+		if err := persistReconcileAudits(workspaceRoot, before, tasks, "execute-next"); err != nil {
 			return ExecuteNextResult{}, err
 		}
 	}
@@ -71,9 +80,31 @@ func ExecuteNext(workspaceRoot string, opts ExecuteNextOptions) (ExecuteNextResu
 		}, err
 	}
 
-	selectedIdx, readyCount, err := selectNextTask(workspaceRoot, tasks, opts.TaskID)
+	ws, err := LoadWorkflowState(workspaceRoot)
 	if err != nil {
 		return ExecuteNextResult{}, err
+	}
+	if ws.SchedulingPausedReason != "" && opts.TaskID == "" {
+		ready, _ := ReadyTasks(workspaceRoot, tasks)
+		return ExecuteNextResult{
+			Action:         "scheduling_paused",
+			Message:        ws.SchedulingPausedReason,
+			ErrorCode:      ErrCodeSchedulingPaused,
+			Reconciled:     reconcileReport.UpdatedCount,
+			ReadyQueueSize: len(ready),
+		}, NewCodedError(ErrCodeSchedulingPaused, ws.SchedulingPausedReason)
+	}
+
+	selectedIdx, readyCount, err := selectNextTask(workspaceRoot, tasks, opts.TaskID)
+	if err != nil {
+		code := CodedErrorCode(err)
+		return ExecuteNextResult{
+			Action:         "rejected",
+			Message:        err.Error(),
+			ErrorCode:      code,
+			Reconciled:     reconcileReport.UpdatedCount,
+			ReadyQueueSize: readyCount,
+		}, err
 	}
 	if selectedIdx == -1 {
 		return ExecuteNextResult{
@@ -116,6 +147,13 @@ func ExecuteNext(workspaceRoot string, opts ExecuteNextOptions) (ExecuteNextResu
 			if err := SaveTasks(workspaceRoot, tasks); err != nil {
 				return ExecuteNextResult{}, err
 			}
+			// Release lease on REWORK so resume can reclaim; do not schedule peers.
+			ws, _ := LoadWorkflowState(workspaceRoot)
+			if ws.ActiveTaskID == task.ID {
+				ClearExecutionLease(&ws)
+				_ = SaveWorkflowState(workspaceRoot, ws)
+			}
+			_ = SyncWorkflowFromTasks(workspaceRoot)
 			return result, nil
 		}
 
@@ -126,15 +164,21 @@ func ExecuteNext(workspaceRoot string, opts ExecuteNextOptions) (ExecuteNextResu
 		if tasks[idx].Status != StatusVerifying {
 			return ExecuteNextResult{}, fmt.Errorf("task %s expected VERIFYING state after verification", task.ID)
 		}
-		if err := tasks[idx].TransitionTo(StatusDone); err != nil {
+		tr, err := ApplyTransition(workspaceRoot, tasks, TransitionSpec{
+			TaskID:     task.ID,
+			To:         StatusDone,
+			Reason:     "verification passed",
+			Actor:      "execute-next",
+			Command:    "feature-dev execute-next",
+			Event:      "execute_next_completed",
+			Message:    "execute-next moved task to DONE",
+			ClearLease: true,
+			ClearBlock: true,
+		})
+		if err != nil {
 			return ExecuteNextResult{}, err
 		}
-		if err := AppendTaskSummary(workspaceRoot, tasks[idx], "execute_next_completed", "execute-next moved task to DONE"); err != nil {
-			return ExecuteNextResult{}, err
-		}
-		if err := SaveTasks(workspaceRoot, tasks); err != nil {
-			return ExecuteNextResult{}, err
-		}
+		tasks = tr.Tasks
 		tasks, unlocked, _ := PromoteTasksAfterCompletion(workspaceRoot, tasks)
 		if len(unlocked) > 0 {
 			if err := SaveTasks(workspaceRoot, tasks); err != nil {
@@ -142,12 +186,20 @@ func ExecuteNext(workspaceRoot string, opts ExecuteNextOptions) (ExecuteNextResu
 			}
 		}
 		_ = SyncWorkflowFromTasks(workspaceRoot)
-		result.StatusAfter = tasks[idx].Status
+		result.StatusAfter = StatusDone
 		result.Message = "verification passed and task marked DONE"
 		return result, nil
 
 	case StatusRunning:
 		result.Action = "implement"
+		if !opts.DryRun {
+			ws, _ := LoadWorkflowState(workspaceRoot)
+			_ = HeartbeatLease(&ws, task.ID, DefaultLeaseTTL, ws.UpdatedAt)
+			if ws.ActiveTaskID == "" {
+				_ = ClaimExecution(&ws, task.ID, "execute-next", DefaultLeaseTTL, ws.UpdatedAt)
+			}
+			_ = SaveWorkflowState(workspaceRoot, ws)
+		}
 		ctx, err := BuildTaskContext(workspaceRoot, task, opts.ContextLevel, opts.ContextBudget)
 		if err != nil {
 			return ExecuteNextResult{}, err
@@ -157,6 +209,13 @@ func ExecuteNext(workspaceRoot string, opts ExecuteNextOptions) (ExecuteNextResu
 		result.Message = "task is RUNNING; continue implementation using context"
 		return result, nil
 
+	case StatusDone:
+		result.Action = "already_done"
+		result.StatusAfter = StatusDone
+		result.Message = "task is already DONE"
+		result.ErrorCode = ErrCodeAlreadyDone
+		return result, nil
+
 	default:
 		result.Action = "start"
 		if opts.DryRun {
@@ -164,75 +223,127 @@ func ExecuteNext(workspaceRoot string, opts ExecuteNextOptions) (ExecuteNextResu
 			result.Message = "dry run: would transition task to RUNNING"
 			return result, nil
 		}
+
+		// Ensure READY is persisted+audited before RUNNING when promoting.
 		if task.Status != StatusReady {
-			if err := tasks[selectedIdx].TransitionTo(StatusReady); err != nil {
+			tr, err := ApplyTransition(workspaceRoot, tasks, TransitionSpec{
+				TaskID:  task.ID,
+				To:      StatusReady,
+				Reason:  "promoted before start",
+				Actor:   "execute-next",
+				Command: "feature-dev execute-next",
+				Event:   "task_promoted_ready",
+				Message: fmt.Sprintf("status %s -> READY before start", task.Status),
+			})
+			if err != nil {
 				return ExecuteNextResult{}, err
 			}
+			tasks = tr.Tasks
 		}
-		if err := tasks[selectedIdx].TransitionTo(StatusRunning); err != nil {
-			return ExecuteNextResult{}, err
+
+		tr, err := ApplyTransition(workspaceRoot, tasks, TransitionSpec{
+			TaskID:     task.ID,
+			To:         StatusRunning,
+			Reason:     "execute-next claimed task",
+			Actor:      "execute-next",
+			Command:    "feature-dev execute-next",
+			Event:      "execute_next_started",
+			Message:    "execute-next moved task to RUNNING",
+			ClaimLease: true,
+			ClearBlock: true,
+		})
+		if err != nil {
+			code := CodedErrorCode(err)
+			result.Action = "rejected"
+			result.Message = err.Error()
+			result.ErrorCode = code
+			return result, err
 		}
-		if err := AppendTaskSummary(workspaceRoot, tasks[selectedIdx], "execute_next_started", "execute-next moved task to RUNNING"); err != nil {
-			return ExecuteNextResult{}, err
-		}
-		if err := SaveTasks(workspaceRoot, tasks); err != nil {
-			return ExecuteNextResult{}, err
-		}
+		tasks = tr.Tasks
 		_ = SyncWorkflowFromTasks(workspaceRoot)
 
-		ctx, err := BuildTaskContext(workspaceRoot, tasks[selectedIdx], opts.ContextLevel, opts.ContextBudget)
+		ctx, err := BuildTaskContext(workspaceRoot, tasks[tr.Index], opts.ContextLevel, opts.ContextBudget)
 		if err != nil {
 			return ExecuteNextResult{}, err
 		}
 		result.Context = &ctx
-		result.StatusAfter = tasks[selectedIdx].Status
+		result.StatusAfter = StatusRunning
 		result.Message = "task moved to RUNNING"
+		_ = AppendCommandJournal(workspaceRoot, "execute-next", []string{task.ID}, 0, "started", "")
 		return result, nil
 	}
 }
 
 func selectNextTask(workspaceRoot string, tasks []Task, requestedTaskID string) (int, int, error) {
-	if requestedTaskID != "" {
-		for i, task := range tasks {
-			if task.ID == requestedTaskID {
-				return i, 0, nil
-			}
-		}
-		return -1, 0, fmt.Errorf("task %s not found", requestedTaskID)
-	}
-
 	ready, err := ReadyTasks(workspaceRoot, tasks)
 	if err != nil {
 		return -1, 0, err
 	}
-	readyIDs := make([]string, 0, len(ready))
-	for _, task := range ready {
-		readyIDs = append(readyIDs, task.ID)
-	}
-	sort.Strings(readyIDs)
+	readyCount := len(ready)
 
+	if requestedTaskID != "" {
+		idx := findTaskIndex(tasks, requestedTaskID)
+		if idx == -1 {
+			return -1, readyCount, fmt.Errorf("task %s not found", requestedTaskID)
+		}
+		task := tasks[idx]
+		switch task.Status {
+		case StatusDone:
+			return -1, readyCount, NewCodedError(ErrCodeAlreadyDone, fmt.Sprintf("task %s is already DONE", requestedTaskID))
+		case StatusFailed:
+			return -1, readyCount, NewCodedError(ErrCodeTaskNotExecutable, fmt.Sprintf("task %s is FAILED; run feature-dev task resume %s", requestedTaskID, requestedTaskID))
+		case StatusBlocked:
+			return -1, readyCount, NewCodedError(ErrCodeTaskNotExecutable, fmt.Sprintf("task %s is BLOCKED; run feature-dev task unblock %s", requestedTaskID, requestedTaskID))
+		case StatusRework:
+			return -1, readyCount, NewCodedError(ErrCodeTaskNotExecutable, fmt.Sprintf("task %s requires rework; run feature-dev task resume %s", requestedTaskID, requestedTaskID))
+		case StatusRunning, StatusImplemented, StatusVerifying, StatusReady:
+			// executable
+		case StatusReviewPending, StatusPlanned, StatusDraft:
+			return -1, readyCount, NewCodedError(ErrCodeTaskNotExecutable, fmt.Sprintf("task %s is %s; run feature-dev reconcile first", requestedTaskID, task.Status))
+		default:
+			return -1, readyCount, NewCodedError(ErrCodeTaskNotExecutable, fmt.Sprintf("task %s status %s is not executable", requestedTaskID, task.Status))
+		}
+
+		// If another active task exists and requested is a different READY start, refuse.
+		active := ActiveTasks(tasks)
+		if task.Status == StatusReady {
+			for _, a := range active {
+				if a.ID != task.ID {
+					return -1, readyCount, NewCodedError(ErrCodeWorkflowBusy, fmt.Sprintf("task %s is already active", a.ID))
+				}
+			}
+			ws, err := LoadWorkflowState(workspaceRoot)
+			if err != nil {
+				return -1, readyCount, err
+			}
+			if LeaseHeld(ws, ws.UpdatedAt) && ws.ActiveTaskID != "" && ws.ActiveTaskID != task.ID {
+				return -1, readyCount, NewCodedError(ErrCodeWorkflowBusy, fmt.Sprintf("active task %s holds execution lease", ws.ActiveTaskID))
+			}
+		}
+		return idx, readyCount, nil
+	}
+
+	// Prefer existing active tasks (resume) over starting new READY work.
+	activeIDs := make([]string, 0)
 	for _, task := range tasks {
-		if task.Status == StatusImplemented || task.Status == StatusVerifying {
-			return findTaskIndex(tasks, task.ID), len(readyIDs), nil
+		if IsActiveStatus(task.Status) {
+			activeIDs = append(activeIDs, task.ID)
 		}
 	}
-
-	if len(readyIDs) > 0 {
-		return findTaskIndex(tasks, readyIDs[0]), len(readyIDs), nil
+	sort.Strings(activeIDs)
+	if len(activeIDs) > 0 {
+		return findTaskIndex(tasks, activeIDs[0]), readyCount, nil
 	}
 
-	runningIDs := make([]string, 0)
-	for _, task := range tasks {
-		if task.Status == StatusRunning {
-			runningIDs = append(runningIDs, task.ID)
-		}
+	schedulable, err := SchedulableTasks(workspaceRoot, tasks)
+	if err != nil {
+		return -1, readyCount, err
 	}
-	sort.Strings(runningIDs)
-	if len(runningIDs) > 0 {
-		return findTaskIndex(tasks, runningIDs[0]), 0, nil
+	if len(schedulable) > 0 {
+		return findTaskIndex(tasks, schedulable[0].ID), readyCount, nil
 	}
 
-	return -1, 0, nil
+	return -1, readyCount, nil
 }
 
 func BuildExecuteNextCommand() *cobra.Command {
@@ -265,14 +376,28 @@ func BuildExecuteNextCommand() *cobra.Command {
 					MaxFileChars:  maxFileChars,
 				},
 			})
-			if err != nil {
+			if err != nil && result.Action == "" {
+				return err
+			}
+			if err != nil && result.Action != "plan_not_approved" && result.Action != "rejected" && result.Action != "scheduling_paused" && result.Action != "already_done" {
+				if jsonFlag {
+					enc := json.NewEncoder(os.Stdout)
+					enc.SetIndent("", "  ")
+					_ = enc.Encode(result)
+				}
 				return err
 			}
 
 			if jsonFlag {
 				enc := json.NewEncoder(os.Stdout)
 				enc.SetIndent("", "  ")
-				return enc.Encode(result)
+				if encErr := enc.Encode(result); encErr != nil {
+					return encErr
+				}
+				if result.Action == "plan_not_approved" || result.Action == "rejected" || result.Action == "scheduling_paused" {
+					return err
+				}
+				return nil
 			}
 
 			fmt.Printf("action: %s\n", result.Action)
@@ -291,6 +416,9 @@ func BuildExecuteNextCommand() *cobra.Command {
 			}
 			if result.Verification != nil {
 				fmt.Printf("verification exit code: %d\n", result.Verification.ExitCode)
+			}
+			if result.Action == "plan_not_approved" || result.Action == "rejected" || result.Action == "scheduling_paused" {
+				return err
 			}
 			return nil
 		},
@@ -319,6 +447,11 @@ func ExecuteLoop(workspaceRoot string, opts ExecuteLoopOptions) (ExecuteLoopResu
 	for i := 0; i < opts.MaxSteps; i++ {
 		step, err := ExecuteNext(workspaceRoot, opts.ExecuteNextOptions)
 		if err != nil {
+			if step.Action == "plan_not_approved" || step.Action == "rejected" || step.Action == "scheduling_paused" {
+				loop.Steps = append(loop.Steps, step)
+				loop.StoppedReason = step.Action
+				return loop, err
+			}
 			if len(loop.Steps) == 0 && step.Action == "plan_not_approved" {
 				loop.Steps = append(loop.Steps, step)
 				loop.StoppedReason = "plan_not_approved"
@@ -349,20 +482,19 @@ func ExecuteLoop(workspaceRoot string, opts ExecuteLoopOptions) (ExecuteLoopResu
 		case "implement", "start":
 			loop.StoppedReason = "awaiting_code_changes"
 			return loop, nil
+		case "already_done":
+			loop.StoppedReason = "already_done"
+			return loop, nil
 		case "verify_failed":
 			loop.VerifyFailures++
-			if loop.VerifyFailures >= opts.MaxVerifyFailures {
-				loop.StoppedReason = "verify_failure_budget_reached"
-				return loop, nil
-			}
+			loop.StoppedReason = "awaiting_rework"
+			return loop, nil
 		case "verify":
 			// keep processing next deterministic step until max-steps or a stop condition.
 		default:
 			loop.StoppedReason = "unknown_action"
 			return loop, nil
 		}
-
-		// When a specific task is requested, keep loop focused on the same task.
 	}
 
 	loop.StoppedReason = "max_steps_reached"

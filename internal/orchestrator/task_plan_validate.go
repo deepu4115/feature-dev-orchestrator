@@ -103,6 +103,27 @@ func ValidateTaskPlan(workspaceRoot string, tasks []Task, fromTasks bool) (PlanV
 		for _, step := range task.Verification {
 			if strings.TrimSpace(step.Command) != "" {
 				hasVerify = true
+				if task.Repository != "" && task.Repository != "workspace" && repoIDs[task.Repository] {
+					repoPath := ""
+					for _, r := range repos {
+						if r.ID == task.Repository {
+							repoPath = r.Path
+							if !filepath.IsAbs(repoPath) {
+								repoPath = filepath.Join(workspaceRoot, r.Path)
+							}
+							break
+						}
+					}
+					if repoPath != "" {
+						if err := ValidateVerificationCommandAvailable(repoPath, NormalizeVerificationCommand(task, step.Command)); err != nil {
+							report.Valid = false
+							report.Errors = append(report.Errors, PlanValidationIssue{
+								Level: "error", Code: ErrCodeVerificationCmdMissing,
+								Message: fmt.Sprintf("task %s: %s — use a command available in the repo (e.g. mvn test if no mvnw)", task.ID, err.Error()),
+							})
+						}
+					}
+				}
 				break
 			}
 		}
@@ -228,10 +249,11 @@ func ValidateTaskPlan(workspaceRoot string, tasks []Task, fromTasks bool) (PlanV
 			}
 		}
 		if !hasWorkspaceVerify && !hasDeferral {
-			report.Warnings = append(report.Warnings, PlanValidationIssue{
-				Level:   "warning",
+			report.Valid = false
+			report.Errors = append(report.Errors, PlanValidationIssue{
+				Level:   "error",
 				Code:    "cross_repo_verify_not_declared",
-				Message: "cross-repository dependencies detected; declare workspace-verify.json commands or cross_repo_verification_deferral in risks",
+				Message: "cross-repository dependencies detected; declare workspace-verify.json commands or cross_repo_verification_deferral in risks. Run: feature-dev schema show workspace-verify --json",
 			})
 		}
 	}

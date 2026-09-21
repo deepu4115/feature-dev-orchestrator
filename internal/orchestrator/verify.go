@@ -131,16 +131,34 @@ func verifyTask(workspaceRoot string, tasks []Task, taskID string, timeoutSecond
 	}
 
 	if target.Status == StatusImplemented {
-		if err := tasks[idx].TransitionTo(StatusVerifying); err != nil {
+		tr, err := ApplyTransition(workspaceRoot, tasks, TransitionSpec{
+			TaskID:         taskID,
+			To:             StatusVerifying,
+			Reason:         "starting verification",
+			Actor:          "verify",
+			Command:        "feature-dev verify",
+			Event:          "verification_started",
+			Message:        "task moved to VERIFYING",
+			ClaimLease:     true,
+			HeartbeatLease: false,
+		})
+		if err != nil {
 			return nil, VerificationResult{}, err
 		}
+		tasks = tr.Tasks
+		idx = tr.Index
+	} else {
+		ws, _ := LoadWorkflowState(workspaceRoot)
+		now := time.Now().UTC()
+		_ = HeartbeatLease(&ws, taskID, DefaultLeaseTTL, now)
+		_ = SaveWorkflowState(workspaceRoot, ws)
 	}
 
 	command := defaultVerificationCommand(repoPath)
-	for _, step := range target.Verification {
+	for _, step := range tasks[idx].Verification {
 		candidate := strings.TrimSpace(step.Command)
 		if candidate != "" {
-			command = NormalizeVerificationCommand(target, candidate)
+			command = NormalizeVerificationCommand(tasks[idx], candidate)
 			break
 		}
 	}
@@ -152,12 +170,41 @@ func verifyTask(workspaceRoot string, tasks []Task, taskID string, timeoutSecond
 	}
 
 	if err != nil {
-		_ = tasks[idx].TransitionTo(StatusRework)
-		_ = AppendTaskSummary(workspaceRoot, tasks[idx], "verification_failed", fmt.Sprintf("verify command failed with exit code %d", result.ExitCode))
-		return tasks, result, err
+		tr, trErr := ApplyTransition(workspaceRoot, tasks, TransitionSpec{
+			TaskID:          taskID,
+			To:              StatusRework,
+			Reason:          fmt.Sprintf("verification failed exit %d", result.ExitCode),
+			Actor:           "verify",
+			Command:         "feature-dev verify",
+			Event:           "verification_failed",
+			Message:         fmt.Sprintf("verify command failed with exit code %d", result.ExitCode),
+			VerifierCommand: command,
+			ClearLease:      true,
+			ClearBlock:      true,
+		})
+		if trErr != nil {
+			_ = ApplyTransitionInMemory(&tasks[idx], StatusRework, nil, true, time.Now().UTC())
+			_ = AppendTaskSummary(workspaceRoot, tasks[idx], "verification_failed", fmt.Sprintf("verify command failed with exit code %d", result.ExitCode))
+			return tasks, result, err
+		}
+		return tr.Tasks, result, err
 	}
 
-	_ = AppendTaskSummary(workspaceRoot, tasks[idx], "verification_passed", "verification command completed successfully")
+	entry := TaskSummaryRecord{
+		Timestamp:       time.Now().UTC(),
+		TaskID:          tasks[idx].ID,
+		Repository:      tasks[idx].Repository,
+		Status:          tasks[idx].Status,
+		Event:           "verification_passed",
+		Message:         "verification command completed successfully",
+		Reason:          "verification passed",
+		Actor:           "verify",
+		Command:         "feature-dev verify",
+		VerifierCommand: command,
+	}
+	if appendErr := appendTaskSummaryRecord(workspaceRoot, entry); appendErr != nil {
+		return tasks, result, appendErr
+	}
 
 	return tasks, result, nil
 }
@@ -244,4 +291,37 @@ func BuildVerifyWorkspaceCommand() *cobra.Command {
 	}
 	cmd.Flags().Int("timeout", defaultVerifyTimeout, "Verification timeout in seconds")
 	return cmd
+}
+
+// ValidateVerificationCommandAvailable checks that the command's first token exists in the repo or PATH.
+func ValidateVerificationCommandAvailable(repoPath, command string) error {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return fmt.Errorf("empty verification command")
+	}
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return fmt.Errorf("empty verification command")
+	}
+	bin := fields[0]
+	switch {
+	case strings.HasPrefix(bin, "./") || strings.HasPrefix(bin, "../"):
+		full := filepath.Join(repoPath, bin)
+		if !Exists(full) {
+			return NewCodedError(ErrCodeVerificationCmdMissing, fmt.Sprintf("verification binary %s not found in %s", bin, repoPath))
+		}
+	case bin == "mvnw" || bin == "gradlew":
+		if !Exists(filepath.Join(repoPath, bin)) {
+			return NewCodedError(ErrCodeVerificationCmdMissing, fmt.Sprintf("verification wrapper %s not found in %s", bin, repoPath))
+		}
+	default:
+		if _, err := exec.LookPath(bin); err != nil {
+			// local wrappers without ./
+			if Exists(filepath.Join(repoPath, bin)) {
+				return nil
+			}
+			return NewCodedError(ErrCodeVerificationCmdMissing, fmt.Sprintf("verification command %q not found on PATH or in repo", bin))
+		}
+	}
+	return nil
 }

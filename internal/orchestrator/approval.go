@@ -167,7 +167,7 @@ func ApprovePlan(workspaceRoot string, opts ApprovePlanOptions) (ApprovePlanResu
 	if err != nil {
 		return ApprovePlanResult{}, ws, nil, err
 	}
-	unlocked, err := PromoteDependencyReadyTasks(tasks)
+	tasks, unlocked, err := PromoteDependencyReadyTasksAudited(workspaceRoot, tasks, "approve", "feature-dev approve")
 	if err != nil {
 		return ApprovePlanResult{}, ws, nil, err
 	}
@@ -212,33 +212,53 @@ func PromoteApprovedTasks(tasks []Task) ([]string, error) {
 }
 
 func PromoteDependencyReadyTasks(tasks []Task) ([]string, error) {
-	byID := map[string]int{}
-	for i, task := range tasks {
-		byID[task.ID] = i
-	}
-	unlocked := []string{}
-	for i := range tasks {
-		task := &tasks[i]
-		if task.Status != StatusReviewPending && task.Status != StatusPlanned && task.Status != StatusDraft {
-			continue
-		}
-		blocked := false
-		for _, depID := range task.Dependencies {
-			idx, ok := byID[depID]
-			if !ok || tasks[idx].Status != StatusDone {
-				blocked = true
-				break
-			}
-		}
-		if blocked {
-			continue
-		}
-		task.Status = StatusReady
-		task.UpdatedAt = time.Now().UTC()
-		unlocked = append(unlocked, task.ID)
+	now := time.Now().UTC()
+	unlocked, err := promoteDependencyReadyTasksInMemory(tasks, now)
+	if err != nil {
+		return nil, err
 	}
 	sort.Strings(unlocked)
 	return unlocked, nil
+}
+
+// PromoteDependencyReadyTasksAudited promotes and writes audit events for each unlock.
+func PromoteDependencyReadyTasksAudited(workspaceRoot string, tasks []Task, actor, command string) ([]Task, []string, error) {
+	before := map[string]TaskStatus{}
+	for _, t := range tasks {
+		before[t.ID] = t.Status
+	}
+	unlocked, err := PromoteDependencyReadyTasks(tasks)
+	if err != nil {
+		return tasks, nil, err
+	}
+	ws, err := LoadWorkflowState(workspaceRoot)
+	if err != nil {
+		return tasks, unlocked, err
+	}
+	for _, id := range unlocked {
+		idx := findTaskIndex(tasks, id)
+		if idx < 0 {
+			continue
+		}
+		entry := TaskSummaryRecord{
+			Timestamp:        time.Now().UTC(),
+			TaskID:           id,
+			Repository:       tasks[idx].Repository,
+			Status:           StatusReady,
+			PreviousStatus:   before[id],
+			NextStatus:       StatusReady,
+			Event:            "task_promoted_ready",
+			Message:          fmt.Sprintf("status %s -> READY", before[id]),
+			Reason:           "dependencies complete",
+			Actor:            actor,
+			Command:          command,
+			WorkflowRevision: ws.CurrentPlanRevision,
+		}
+		if err := appendTaskSummaryRecord(workspaceRoot, entry); err != nil {
+			return tasks, unlocked, err
+		}
+	}
+	return tasks, unlocked, nil
 }
 
 func CheckRepositorySnapshotDrift(workspaceRoot string, doc PlanDocument) ([]string, error) {

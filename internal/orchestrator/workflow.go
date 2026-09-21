@@ -14,12 +14,14 @@ func DefaultWorkflowStatePath(workspaceRoot string) string {
 
 func DefaultWorkflowState() WorkflowState {
 	return WorkflowState{
-		SchemaVersion:       "1.0",
+		SchemaVersion:       WorkflowSchemaVersion,
 		CurrentPlanRevision: 0,
 		WorkflowStatus:      WorkflowNew,
 		UpdatedAt:           time.Now().UTC(),
 	}
 }
+
+const WorkflowSchemaVersion = "1.1"
 
 func LoadWorkflowState(workspaceRoot string) (WorkflowState, error) {
 	path := DefaultWorkflowStatePath(workspaceRoot)
@@ -34,16 +36,20 @@ func LoadWorkflowState(workspaceRoot string) (WorkflowState, error) {
 	if err := json.Unmarshal(data, &ws); err != nil {
 		return WorkflowState{}, fmt.Errorf("unmarshal workflow state: %w", err)
 	}
-	if ws.SchemaVersion == "" {
-		ws.SchemaVersion = "1.0"
-	}
+	migrateWorkflowState(&ws)
 	return ws, nil
+}
+
+func migrateWorkflowState(ws *WorkflowState) {
+	if ws.SchemaVersion == "" || ws.SchemaVersion == "1.0" {
+		ws.SchemaVersion = WorkflowSchemaVersion
+	}
 }
 
 func SaveWorkflowState(workspaceRoot string, ws WorkflowState) error {
 	ws.UpdatedAt = time.Now().UTC()
-	if ws.SchemaVersion == "" {
-		ws.SchemaVersion = "1.0"
+	if ws.SchemaVersion == "" || ws.SchemaVersion == "1.0" {
+		ws.SchemaVersion = WorkflowSchemaVersion
 	}
 	data, err := json.MarshalIndent(ws, "", "  ")
 	if err != nil {

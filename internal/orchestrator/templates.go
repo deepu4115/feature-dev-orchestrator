@@ -2,8 +2,10 @@ package orchestrator
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
+	"path/filepath"
 	"strings"
 )
 
@@ -66,6 +68,15 @@ var schemaArtifacts = map[string]schemaArtifact{
 		RootKey:      "repositories",
 		RequiredFields: []string{
 			"repositories (array of {repository, evidence})",
+		},
+	},
+	"workspace-verify": {
+		TemplateFile: "templates/workspace-verify.json",
+		OutputPath:   PlanDraftWorkspaceVerifyPath,
+		Description:  "Cross-repository workspace verification commands, or declare cross_repo_verification_deferral in risks",
+		RootKey:      "commands",
+		RequiredFields: []string{
+			"commands (string array of workspace-level verification commands)",
 		},
 	},
 }
@@ -160,6 +171,14 @@ func InitTasksFromTemplate(workspaceRoot string, force bool) (string, error) {
 	if Exists(dest) && !force {
 		return "", fmt.Errorf("%s already exists (use --force to overwrite)", dest)
 	}
+	repos, _ := readRepositoryRegistry(workspaceRoot)
+	if len(repos) > 0 {
+		tasks := GenerateRepoAwareTasks(workspaceRoot, repos)
+		if err := SaveTasks(workspaceRoot, tasks); err != nil {
+			return "", err
+		}
+		return dest, nil
+	}
 	data, err := ReadEmbeddedTemplate("tasks")
 	if err != nil {
 		return "", err
@@ -168,6 +187,48 @@ func InitTasksFromTemplate(workspaceRoot string, force bool) (string, error) {
 		return "", err
 	}
 	return dest, nil
+}
+
+// GenerateRepoAwareTasks builds initial tasks from discovered repositories and build systems.
+func GenerateRepoAwareTasks(workspaceRoot string, repos []Repository) []Task {
+	tasks := make([]Task, 0, len(repos))
+	for i, repo := range repos {
+		repoPath := repo.Path
+		if !filepath.IsAbs(repoPath) {
+			repoPath = filepath.Join(workspaceRoot, repo.Path)
+		}
+		cmd := defaultVerificationCommand(repoPath)
+		id := fmt.Sprintf("T%03d", i+1)
+		tasks = append(tasks, Task{
+			ID:           id,
+			Title:        fmt.Sprintf("Implement changes in %s", repo.ID),
+			Repository:   repo.ID,
+			Status:       StatusDraft,
+			Goal:         fmt.Sprintf("Apply planned changes for repository %s", repo.ID),
+			RequirementIDs: []string{"R001"},
+			Verification: []VerificationStep{{Name: "default", Command: cmd}},
+			VerificationWorkingDirectory: "repository_root",
+		})
+	}
+	return tasks
+}
+
+// SeedRequirementsFromRepos writes a minimal requirements stub when missing.
+func SeedRequirementsFromRepos(workspaceRoot string, force bool) error {
+	path := PlanDraftRequirementsPath(workspaceRoot)
+	if Exists(path) && !force {
+		return nil
+	}
+	payload := map[string]any{
+		"requirements": []map[string]string{
+			{"id": "R001", "description": "Implement the feature described in PLAN.md across discovered repositories"},
+		},
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	return WriteFileAtomically(path, append(data, '\n'))
 }
 
 func WritePlanningBundleFromTemplates(workspaceRoot string, force bool) ([]string, error) {

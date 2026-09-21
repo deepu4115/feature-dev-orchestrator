@@ -1,15 +1,25 @@
 package orchestrator
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 type TaskExplainResult struct {
-	Task                string            `json:"task"`
-	Status              TaskStatus        `json:"status"`
-	Ready               bool              `json:"ready"`
-	BlockingReasons     []string          `json:"blocking_reasons"`
-	SuggestedNextCommand string           `json:"suggested_next_command"`
-	DependencyStatus    map[string]string `json:"dependency_status,omitempty"`
-	WorkflowGate        string            `json:"workflow_gate,omitempty"`
+	Task                 string            `json:"task"`
+	Status               TaskStatus        `json:"status"`
+	Ready                bool              `json:"ready"`
+	BlockingReasons      []string          `json:"blocking_reasons"`
+	SuggestedNextCommand string            `json:"suggested_next_command"`
+	DependencyStatus     map[string]string `json:"dependency_status,omitempty"`
+	WorkflowGate         string            `json:"workflow_gate,omitempty"`
+	BlockedReason        string            `json:"blocked_reason,omitempty"`
+	BlockedBy            []string          `json:"blocked_by,omitempty"`
+	BlockedAt            *time.Time        `json:"blocked_at,omitempty"`
+	RecoveryCommand      string            `json:"recovery_command,omitempty"`
+	BlockKind            string            `json:"block_kind,omitempty"`
+	WorkflowBusy         bool              `json:"workflow_busy,omitempty"`
+	ActiveTaskID         string            `json:"active_task_id,omitempty"`
 }
 
 func ExplainTask(workspaceRoot string, taskID string) (TaskExplainResult, error) {
@@ -32,6 +42,12 @@ func ExplainTask(workspaceRoot string, taskID string) (TaskExplainResult, error)
 		Status:           task.Status,
 		DependencyStatus: map[string]string{},
 		BlockingReasons:  []string{},
+		BlockedReason:    task.BlockedReason,
+		BlockedBy:        task.BlockedBy,
+		BlockedAt:        task.BlockedAt,
+		RecoveryCommand:  task.RecoveryCommand,
+		BlockKind:        task.BlockKind,
+		ActiveTaskID:     ws.ActiveTaskID,
 	}
 
 	byID := map[string]Task{}
@@ -58,12 +74,42 @@ func ExplainTask(workspaceRoot string, taskID string) (TaskExplainResult, error)
 		}
 	}
 
-	if task.Status != StatusReady && task.Status != StatusRunning && task.Status != StatusImplemented && task.Status != StatusVerifying {
-		if task.Status == StatusReviewPending || task.Status == StatusPlanned || task.Status == StatusDraft {
-			result.BlockingReasons = append(result.BlockingReasons, fmt.Sprintf("task status is %s; run feature-dev reconcile to promote when dependencies are DONE", task.Status))
-		} else {
-			result.BlockingReasons = append(result.BlockingReasons, fmt.Sprintf("task status is %s", task.Status))
+	if ws.SchedulingPausedReason != "" {
+		result.BlockingReasons = append(result.BlockingReasons, ws.SchedulingPausedReason)
+	}
+	if HasActiveTask(tasks) {
+		active := ActiveTasks(tasks)
+		if len(active) > 0 && active[0].ID != taskID {
+			result.WorkflowBusy = true
+			result.BlockingReasons = append(result.BlockingReasons, fmt.Sprintf("workflow busy: task %s is active", active[0].ID))
 		}
+	}
+
+	switch task.Status {
+	case StatusBlocked:
+		reason := task.BlockedReason
+		if reason == "" {
+			reason = "task status is BLOCKED"
+		}
+		result.BlockingReasons = append(result.BlockingReasons, reason)
+		if task.RecoveryCommand != "" {
+			result.SuggestedNextCommand = task.RecoveryCommand
+		} else {
+			result.SuggestedNextCommand = fmt.Sprintf("feature-dev task unblock %s --reason \"manual unblock\"", taskID)
+		}
+	case StatusRework:
+		result.BlockingReasons = append(result.BlockingReasons, "task requires rework after verification failure")
+		result.SuggestedNextCommand = fmt.Sprintf("feature-dev task resume %s", taskID)
+	case StatusFailed:
+		result.BlockingReasons = append(result.BlockingReasons, "task status is FAILED")
+		result.SuggestedNextCommand = fmt.Sprintf("feature-dev task resume %s", taskID)
+	case StatusReviewPending, StatusPlanned, StatusDraft:
+		result.BlockingReasons = append(result.BlockingReasons, fmt.Sprintf("task status is %s; run feature-dev reconcile to promote when dependencies are DONE", task.Status))
+		result.SuggestedNextCommand = "feature-dev reconcile"
+	case StatusReady, StatusRunning, StatusImplemented, StatusVerifying, StatusDone:
+		// handled below
+	default:
+		result.BlockingReasons = append(result.BlockingReasons, fmt.Sprintf("task status is %s", task.Status))
 	}
 
 	readyTasks, readyErr := ReadyTasks(workspaceRoot, tasks)
@@ -78,19 +124,25 @@ func ExplainTask(workspaceRoot string, taskID string) (TaskExplainResult, error)
 		}
 	}
 
-	if result.Ready {
-		switch task.Status {
-		case StatusReady:
-			result.SuggestedNextCommand = fmt.Sprintf("feature-dev task start %s", taskID)
-		case StatusRunning:
-			result.SuggestedNextCommand = fmt.Sprintf("feature-dev implement %s", taskID)
-		case StatusImplemented, StatusVerifying:
-			result.SuggestedNextCommand = fmt.Sprintf("feature-dev verify %s", taskID)
-		case StatusDone:
-			result.SuggestedNextCommand = "feature-dev execute-loop --json"
+	if result.SuggestedNextCommand == "" {
+		if result.Ready {
+			switch task.Status {
+			case StatusReady:
+				if result.WorkflowBusy {
+					result.SuggestedNextCommand = fmt.Sprintf("feature-dev execute-next (finish active task %s first)", ws.ActiveTaskID)
+				} else {
+					result.SuggestedNextCommand = fmt.Sprintf("feature-dev task start %s", taskID)
+				}
+			case StatusRunning:
+				result.SuggestedNextCommand = fmt.Sprintf("feature-dev task implement %s", taskID)
+			case StatusImplemented, StatusVerifying:
+				result.SuggestedNextCommand = fmt.Sprintf("feature-dev verify %s", taskID)
+			case StatusDone:
+				result.SuggestedNextCommand = "feature-dev execute-loop --json"
+			}
+		} else if len(result.BlockingReasons) > 0 {
+			result.SuggestedNextCommand = "feature-dev reconcile"
 		}
-	} else if len(result.BlockingReasons) > 0 {
-		result.SuggestedNextCommand = "feature-dev reconcile"
 	}
 
 	return result, nil
@@ -104,6 +156,5 @@ func PromoteTasksAfterCompletion(workspaceRoot string, tasks []Task) ([]Task, []
 	if !isExecutionAllowedWorkflowStatus(ws.WorkflowStatus) {
 		return tasks, nil, nil
 	}
-	unlocked, err := PromoteDependencyReadyTasks(tasks)
-	return tasks, unlocked, err
+	return PromoteDependencyReadyTasksAudited(workspaceRoot, tasks, "promote-after-completion", "feature-dev execute-next")
 }

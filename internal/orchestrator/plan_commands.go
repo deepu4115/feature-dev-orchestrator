@@ -363,6 +363,7 @@ func buildPlanScaffoldCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			_ = SeedRequirementsFromRepos(workspaceRoot, force)
 			taskPath, err := InitTasksFromTemplate(workspaceRoot, force)
 			if err != nil && !strings.Contains(err.Error(), "already exists") {
 				return err
@@ -372,9 +373,28 @@ func buildPlanScaffoldCommand() *cobra.Command {
 				return err
 			}
 
+			// Fail closed on placeholder artifacts when repos are registered.
+			tasks, loadErr := LoadTasks(workspaceRoot)
+			if loadErr == nil && len(tasks) > 0 {
+				for _, t := range tasks {
+					if t.Repository == "repo-a" || t.Repository == "repo-b" {
+						return fmt.Errorf("scaffold produced placeholder repository %q; ensure repositories.json is populated and re-run with --force", t.Repository)
+					}
+				}
+				if report, vErr := ValidateTaskPlan(workspaceRoot, tasks, true); vErr == nil && !report.Valid {
+					for _, e := range report.Errors {
+						if e.Code == "invalid_repository" || e.Code == "unknown_requirement_id" || e.Code == ErrCodeVerificationCmdMissing {
+							return fmt.Errorf("scaffold validation failed: %s", e.Message)
+						}
+					}
+				}
+			}
+
 			nextSteps := []string{
+				"Run: feature-dev schema show tasks --json (and schema show workspace-verify --json)",
 				"Read PLAN.md and populate requirements.json with source_section/source_ref fields",
 				"Map each requirement to tasks via requirement_ids in tasks.json",
+				"Declare workspace-verify.json commands or cross_repo_verification_deferral in risks if cross-repo deps exist",
 				fmt.Sprintf("Run: feature-dev plan coverage --from %s --json", from),
 				"Run: feature-dev task preview --json",
 				"Run: feature-dev plan submit --from-tasks",
@@ -386,6 +406,7 @@ func buildPlanScaffoldCommand() *cobra.Command {
 					".feature/plans/draft/risks.json",
 					".feature/plans/draft/impact.json",
 					".feature/plans/draft/repo-analysis.json",
+					".feature/plans/draft/workspace-verify.json",
 					".feature/tasks/tasks.json",
 				},
 				"schema_artifacts": ListSchemaArtifacts(),
