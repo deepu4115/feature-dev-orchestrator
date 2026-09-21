@@ -1,6 +1,6 @@
 ---
 name: feature-dev-orchestrator
-description: 'Use for workspace-native feature orchestration with feature-dev CLI and a feature plan such as PLAN.md, including task DAG planning, repository assignment, dependency validation, PLAN coverage gates, and autonomous execute-loop cycles with minimal manual intervention in Copilot/Cursor. Trigger when user says: use feature-dev command, implement PLAN.md, feature-dev workflow, execute-loop orchestration, or reconcile and continue.'
+description: 'Use for workspace-native feature orchestration with feature-dev CLI and a feature plan such as PLAN.md, including task DAG planning, repository assignment, dependency validation, PLAN coverage gates, single-active-task execution leases, recovery CLIs, and autonomous execute-loop cycles with minimal manual intervention in Copilot/Cursor. Trigger when user says: use feature-dev command, implement PLAN.md, feature-dev workflow, execute-loop orchestration, or reconcile and continue.'
 argument-hint: 'Provide feature goal, constraints, and repos in scope; choose quick or thorough planning.'
 user-invocable: true
 ---
@@ -13,17 +13,30 @@ Use this skill when you want the agent to run feature work through the feature-d
 - Multi-repository feature implementation.
 - Single-repository work where deterministic resume is required.
 - Agent-driven planning of tasks and dependencies before coding.
-- Repeated execute-loop cycles with bounded verification retries.
+- Repeated execute-loop cycles with bounded verification and explicit rework recovery.
 - User prompt includes phrases like "use feature-dev command" or "run feature-dev workflow".
 - User provides a feature plan such as `PLAN.md` and asks the agent to implement it.
 
 ## Required Principles
-1. The CLI is the source of truth for task transitions.
-2. Never manually edit task status fields during normal flow.
-3. Run orchestration commands from workspace root.
-4. Perform code edits only in the repository assigned to the active task.
-5. Always verify task code before returning to orchestration.
-6. **No LLM inside feature-dev** — you (the calling agent) read `PLAN.md` prose and write `requirements.json` / `tasks.json`; the CLI validates coverage and blocks approval on gaps.
+1. **CLI is the only source of truth** for task status, leases, and audit history. Never hand-edit `.feature/tasks/tasks.json` or `.feature/state/workflow.json` during a live run. See [docs/cli-source-of-truth.md](../../../docs/cli-source-of-truth.md).
+2. Run orchestration commands from workspace root (`go run ./cmd/feature-dev` or installed `feature-dev`).
+3. Perform code edits only in the repository assigned to the **active** task.
+4. Always mark implementation complete with `implement <task-id>` before the next `execute-loop`.
+5. **No LLM inside feature-dev** — you (the calling agent) read `PLAN.md` and write draft/tasks JSON; the CLI validates and blocks on gaps.
+6. **At most one in-flight task** (`RUNNING` / `IMPLEMENTED` / `VERIFYING`). Never start a second task while another is active.
+7. **Fix structural/schema problems before domain clarification.** Do not ask conceptual questions when JSON shape or repository IDs are wrong.
+
+## Hard Invariants (do not violate)
+
+| Invariant | Rule |
+|-----------|------|
+| Single active task | `schedulable = dependency_ready AND no_active_task AND lease free AND not scheduling_paused` |
+| Atomic claim | Only one `execute-next` / `task start` may claim the workflow lease |
+| Audited transitions | Every status change writes `.feature/state/task-summaries.jsonl` (prev/next, reason, actor, command, revision) |
+| BLOCKED metadata | A task cannot be `BLOCKED` without `blocked_reason` + `recovery_command` |
+| Verify failure ownership | On verification failure, stop with `awaiting_rework` — do **not** start another READY task |
+| DONE is terminal for execute | `execute-next --task <DONE>` / `execute-loop --task <DONE>` must not re-queue; expect `already_done` |
+| Lifecycle | `REVIEW_PENDING → READY → RUNNING → IMPLEMENTED → VERIFYING → DONE` (never skip READY in audit) |
 
 ## PLAN.md Template
 
@@ -37,6 +50,7 @@ Use [assets/PLAN-template.md](assets/PLAN-template.md) as the starting point. Ke
 | Repo subsections under Requirements | Hints repository ownership for task assignment |
 | No bundled "including X, Y, Z" in one bullet | Triggers `decomposition_hints`; split into separate bullets instead |
 | Verification note: no `cd repo &&` in commands | Verifier already runs from repository root |
+| Prefer real tools in repos | e.g. `mvn test` if no `mvnw`; CLI rejects missing wrappers at plan validate |
 
 ## Three-Link Traceability
 
@@ -53,133 +67,81 @@ Check with:
 go run ./cmd/feature-dev plan coverage --from PLAN.md --json
 ```
 
-Gates in output: `completeness`, `decomposition`, `traceability`, `acceptance_coverage`. Fix `agent_actions` until `valid: true`.
+Gates: `completeness`, `decomposition`, `traceability`, `acceptance_coverage`. Fix `agent_actions` until `valid: true`.
 
 ## Procedure
 
 ### Recommended agent flow
 
-Default end-to-end path. Run from workspace root; use `go run ./cmd/feature-dev` or `feature-dev` if installed.
-
 ```bash
 go run ./cmd/feature-dev init && go run ./cmd/feature-dev discover
 go run ./cmd/feature-dev plan scaffold --from PLAN.md --json
+# Scaffold seeds repo-aware tasks from repositories.json when present.
+# It fails closed on placeholder repos (repo-a/repo-b) and invalid verify commands.
+# Follow manifest next_agent_steps; use schema show for contracts.
+
 # Agent reads PLAN.md + coverage gaps; edits .feature/plans/draft/* and tasks.json
-go run ./cmd/feature-dev plan coverage --from PLAN.md --json   # repeat until valid
-go run ./cmd/feature-dev schema show tasks --json               # if unsure about JSON shape
-go run ./cmd/feature-dev task preview --json                    # always before submit
+go run ./cmd/feature-dev plan coverage --from PLAN.md --json   # until valid
+go run ./cmd/feature-dev schema show tasks --json              # if unsure about shape
+go run ./cmd/feature-dev schema show workspace-verify --json   # when cross-repo deps exist
+go run ./cmd/feature-dev task preview --json                   # always before submit
 go run ./cmd/feature-dev plan submit --from-tasks
-go run ./cmd/feature-dev review --json                          # includes coverage_matrix
+go run ./cmd/feature-dev review --json                         # includes coverage_matrix
 # Wait for explicit user approval
 go run ./cmd/feature-dev approve
 go run ./cmd/feature-dev reconcile && go run ./cmd/feature-dev execute-loop --json
 # On awaiting_code_changes: edit code → implement <task-id> → execute-loop again
+# On awaiting_rework: fix verifier/code → task resume <id> → execute-loop again
 # When all tasks DONE:
 go run ./cmd/feature-dev finalize --json
 ```
 
-Alternative bootstrap (manual scaffold):
+Alternative bootstrap (manual):
 
 ```bash
 go run ./cmd/feature-dev plan draft init
 go run ./cmd/feature-dev task init
 ```
 
-Rules:
+### Planning rules (read carefully)
+
 - Always run `plan coverage --json` after editing requirements/tasks and before submit.
 - Always run `task preview --json` before `plan submit --from-tasks`.
-- **Structural** errors (bad JSON shape) → `schema show <artifact> --json`, `task validate --json`, or `repair tasks --dry-run --json` (workflow stays `PLANNING`).
-- **Coverage** errors (missing PLAN items, orphan requirements) → fix bundle using `agent_actions` from `plan coverage --json`; do not use `plan clarify` for structural issues.
-- **Domain** errors (repo ownership, assumptions) → `plan clarify --json`, ask user, fix, resubmit.
-- During execution: after code changes run `implement <task-id>` before the next `execute-loop`.
-- If a task is stuck, run `task explain <task-id> --json` for blocking reasons.
-- Each cycle: `go run ./cmd/feature-dev agent-hint --json` and follow `suggested_next_command`.
+- **Structural** errors (bad JSON, unknown repo/req IDs, missing verify binary) → `schema show <artifact> --json`, `task validate --json`, or `repair tasks --dry-run --json`. Workflow stays `PLANNING`. Do **not** `plan clarify` for these.
+- **Coverage** errors → fix bundle using `agent_actions` from `plan coverage --json`.
+- **Domain** errors (ownership, assumptions) → `plan clarify --json`, ask user, fix, resubmit.
+- Cross-repo dependencies require either:
+  - `.feature/plans/draft/workspace-verify.json` with `commands`, **or**
+  - `cross_repo_verification_deferral` in risks.
+  Missing both is a **validation error**, not a soft warning.
+- Verification commands are checked against the assigned repo (e.g. `./mvnw` must exist). Prefer build-system defaults: Maven without wrapper → `mvn test`.
 
-### 1) Bootstrap
-Run:
-- `go run ./cmd/feature-dev init`
-- `go run ./cmd/feature-dev discover`
-- `go run ./cmd/feature-dev doctor --json`
-- `go run ./cmd/feature-dev status --json`
-- `go run ./cmd/feature-dev agent-hint --json`
+### Schema artifacts
 
-If doctor reports issues, fix initialization/discovery first.
+Use `go run ./cmd/feature-dev schema show <artifact> --json` for contracts. Valid artifacts:
 
-### 2) Deep Planning (Agent-Owned, No Production Code)
-Allowed paths during planning: `.feature/**`, `PLAN.md`, planning/review artifacts only.
+`tasks`, `requirements`, `assumptions`, `risks`, `impact`, `repo-analysis`, `workspace-verify`
 
-#### 2a) Understand and discover
-- Read `PLAN.md` using [PLAN-template.md](assets/PLAN-template.md) conventions.
-- Extract requirements and acceptance criteria as **separate list items** with stable IDs.
-- Confirm repositories via `discover` and `.feature/repositories.json`.
-
-#### 2b) Scaffold planning artifacts (CLI-first)
-Preferred one-command scaffold:
-
-```bash
-go run ./cmd/feature-dev plan scaffold --from PLAN.md --json
-```
-
-This runs `plan draft init`, `task init`, initial `plan coverage`, and writes `.feature/plans/draft/manifest.json` with `next_agent_steps`.
-
-Or manually:
-- `go run ./cmd/feature-dev plan draft init`
-- `go run ./cmd/feature-dev task init`
-
-Use `go run ./cmd/feature-dev schema show <artifact> --json` for contracts (`tasks`, `requirements`, `assumptions`, `risks`, `impact`, `repo-analysis`). Do not reverse-engineer JSON from Go source.
+Do not reverse-engineer JSON from Go source.
 
 `tasks.json` must be a **top-level JSON array**. Each task needs:
 - `verification`: `[{"command": "mvn test"}]` (array of objects, not a string)
 - `verification_working_directory`: `repository_root` (default) — **do not** use `cd repo &&` in commands
 - `requirement_ids`: links to `requirements.json` entries
+- Valid `repository` IDs from `.feature/repositories.json`
 
-`requirements.json` entries should include:
-- `id`, `description`
-- `source_section`, `source_ref` (copied from PLAN.md for coverage matching)
+### Approve vs reconcile (lifecycle)
 
-#### 2c) Repository and impact analysis
-- Inspect each relevant repository (structure, modules, APIs, tests).
-- Edit `.feature/plans/draft/repo-analysis.json` with evidence paths per repo.
-- Edit `.feature/plans/draft/impact.json` with affected repos and change areas.
+```
+REVIEW_PENDING → READY → RUNNING → IMPLEMENTED → VERIFYING → DONE
+                 ↑
+         promote (audited)
+```
 
-#### 2d) Requirements, assumptions, risks
-- Edit `.feature/plans/draft/requirements.json` — one entry per PLAN bullet (R001, R002, …).
-- Edit `.feature/plans/draft/assumptions.json` (confidence, impact, evidence).
-- Edit `.feature/plans/draft/risks.json` (level, type, mitigation).
-- Optional: `.feature/plans/draft/workspace-verify.json` for cross-repo integration commands.
-- If integration env is unavailable, document `cross_repo_verification_deferral` in risks.
-
-Reference templates under [assets/](assets/) match the embedded CLI templates.
-
-#### 2e) Task graph (decompose requirements into tasks)
-- Edit `.feature/tasks/tasks.json`:
-  - **One task per requirement or per repo-slice** for compound features
-  - `id`, `title`, `repository`, `dependencies`, `verification`, `requirement_ids`
-  - `repository_rationale`, `ownership_confidence`, `planned_verification`
-  - `verification_working_directory`: `repository_root` | `workspace_root` | `custom`
-- Run `go run ./cmd/feature-dev graph`
-- Run `go run ./cmd/feature-dev plan coverage --from PLAN.md --json` until `valid: true`
-- Run `go run ./cmd/feature-dev task preview --json` (or `plan validate --json`)
-
-#### 2f) Submit, clarify, review, approve
-- `go run ./cmd/feature-dev plan submit --from-tasks`
-- On **structural** failure → `schema show`, `task validate --json`, or `repair tasks --dry-run --json`
-- On **coverage** failure → fix `requirements.json` / `tasks.json` per `plan coverage` `agent_actions`; rerun coverage + preview
-- On **domain** failure → `plan clarify --json` → present questions → wait for user → resubmit
-- On pass → `review --json` (check `coverage_matrix`) + `graph`
-- Present tasks.json-first plus requirements, assumptions, risks, impact, and warnings
-- Wait for explicit approval → `approve` (blocks if coverage incomplete unless `--defer-unmapped "reason"`)
-
-If the user requests changes:
-- `go run ./cmd/feature-dev replan --reason "..."`
-- Revise draft bundle + `tasks.json`, rerun coverage, resubmit
-
-Planning rules:
-1. Do not modify production code during planning.
-2. All required draft bundle files must exist before submit passes validation.
-3. Do not guess repo ownership, requirement deferrals, or risk mitigations when validation fails — ask the user.
-4. Do not start implementation until `workflow_status: APPROVED`.
-5. Split compound PLAN bullets into separate requirements/tasks — do not rely on one vague task for multiple capabilities.
+- **`approve`** approves the **plan**. It may unlock **dependency-ready** tasks to `READY` (audited `task_promoted_ready`). It does **not** mean every task is executable.
+- **`reconcile`** is the safe resume boundary: promotes remaining dep-ready `REVIEW_PENDING|PLANNED|DRAFT → READY`, detects orphaned active tasks, and may pause scheduling.
+- Execution may only start `READY` (or resume an already-active task). Direct `REVIEW_PENDING → RUNNING` is illegal.
+- When start needs a promotion, the CLI writes **two** audit events: `→ READY` then `→ RUNNING`.
 
 ### 2g) Agent-hint routing
 
@@ -192,35 +154,40 @@ Planning rules:
 | `plan_coverage_incomplete` | `plan coverage --from PLAN.md --json`, fix per `agent_actions` |
 | `planning_in_progress` | complete draft bundle + tasks, coverage + preview, then submit |
 | `tasks_need_submit` | `plan submit --from-tasks` |
-| `task_plan_invalid` / `plan_needs_clarification` | `plan clarify --json`, ask user, fix, resubmit |
+| `task_plan_invalid` / `plan_needs_clarification` | structural → schema/repair; domain → `plan clarify --json` |
 | `tasks_awaiting_approval` | present review (include `coverage_matrix`), wait for approval |
 | `plan_rejected` / `plan_replanning` | replan, revise, resubmit |
 | `plan_approved_ready` | reconcile + execute-loop |
 | `task_awaiting_implementation` | code in assigned repo, then `implement <task-id>` + execute-loop |
 | `ready_for_orchestration` | reconcile + execute-loop |
-| `tasks_blocked_or_waiting` | `task explain <id> --json`, then reconcile |
+| `tasks_blocked_or_waiting` | `task explain <id> --json`, then follow `recovery_command` / `suggested_next_command` (`unblock` / `resume` / `recover`) |
 | `awaiting_final_verification` | `finalize --json` |
 | `feature_completed` | summarize outcome (`status --json` shows `completion_ready: true`) |
 
 ### 3) Reconcile and Execute (After Approval Only)
-Run:
-- `go run ./cmd/feature-dev reconcile` (or `--dry-run --json` to inspect)
-- `go run ./cmd/feature-dev execute-loop --json`
 
-After a task completes, `reconcile` promotes dependency-ready tasks from `REVIEW_PENDING` → `READY` automatically.
+```bash
+go run ./cmd/feature-dev reconcile --dry-run --json   # inspect proposed transitions / orphans
+go run ./cmd/feature-dev reconcile --json
+go run ./cmd/feature-dev execute-loop --json
+```
 
-#### Task status lifecycle (agent-driven via CLI)
-Each task moves through:
+Useful reconcile flags:
+- `--auto-unblock-stale` — promote lease-expired/stale `BLOCKED` tasks whose deps are DONE (off by default)
+- `--repair-invariants` — fail if workspace invariants are violated after reconcile
 
-`READY` → `RUNNING` → `IMPLEMENTED` → `VERIFYING` → `DONE`
+#### Task status lifecycle
 
 | Transition | Command | Who |
 |------------|---------|-----|
-| → `RUNNING` | `execute-loop` / `execute-next` / `task start` | CLI |
-| → `IMPLEMENTED` | `implement <task-id>` | **Agent** (after code changes) |
-| → `VERIFYING` → `DONE` | `execute-loop` / `execute-next` (on verify pass) | CLI |
+| → `READY` | `approve` / `reconcile` / `task unblock` / `task resume` / `task recover` | CLI (audited) |
+| → `RUNNING` | `execute-loop` / `execute-next` / `task start` | CLI (claims lease) |
+| → `IMPLEMENTED` | `implement <task-id>` | **Agent** after code changes |
+| → `VERIFYING` → `DONE` | `execute-loop` / `execute-next` on verify pass | CLI |
+| → `REWORK` | verification failure | CLI; **stop** — do not schedule peers |
+| → `BLOCKED` | reconcile orphan/missing repo | CLI with reason + recovery_command |
 
-After coding, always run:
+After coding:
 
 ```bash
 go run ./cmd/feature-dev implement <task-id>
@@ -228,65 +195,89 @@ go run ./cmd/feature-dev execute-loop --json
 ```
 
 Do not call `verify` on a `RUNNING` task — it requires `IMPLEMENTED` or `VERIFYING`.
-`execute-loop` verifies and marks `DONE` automatically when tests pass.
 
 #### Per-task execution cycle
-1. `execute-loop --json` starts the next ready task (`RUNNING`) or verifies an `IMPLEMENTED` task.
-2. If stop reason is `awaiting_code_changes`, edit code in the task's assigned repository only.
-3. Run `go run ./cmd/feature-dev implement <task-id>` to mark coding complete.
-4. Run `go run ./cmd/feature-dev execute-loop --json` again — verify on pass → `DONE`.
+1. `execute-loop --json` resumes the active task, or starts the next **schedulable** `READY` task (never a second RUNNING).
+2. If stop reason is `awaiting_code_changes`, edit code in that task's repository only.
+3. Run `implement <task-id>`, then `execute-loop --json` again (verify → `DONE` on pass).
+4. If stop reason is `awaiting_rework`, fix code and/or verification command, then:
+   ```bash
+   go run ./cmd/feature-dev task resume <task-id>
+   go run ./cmd/feature-dev execute-loop --json
+   ```
 5. Repeat until all tasks are `DONE`, then `finalize --json`.
 
-Execution rules:
-1. Confirm workflow status is `APPROVED`, `EXECUTING`, or `VERIFYING`.
-2. Do not run execute-loop while `CLARIFICATION_NEEDED` or `REVIEW_PENDING`.
-3. Implement only the assigned task in its assigned repository.
-4. After code changes, run `implement <task-id>` before rerunning execute-loop.
-5. Run `go run ./cmd/feature-dev finalize --json` when all tasks are DONE.
-6. Inspect `cross_repo_verify` in finalize output for skipped integration gates and residual risk.
-7. If a task won't start, run `task explain <task-id> --json`.
+#### Recovery commands (CLI-as-SoT — never hand-edit status)
 
-Interpret stop reasons:
-- `plan_not_approved`: run review flow and obtain approval before coding.
-- `awaiting_code_changes`: edit code in assigned repo, run `implement <task-id>`, then rerun execute-loop.
-- `awaiting_final_verification`: run finalize.
-- `feature_completed`: summarize and stop.
-- `verify_failure_budget_reached`: inspect artifacts, fix code, run `implement <task-id>` if needed, rerun loop.
-- `no_executable_task`: run `task explain`, reconcile, or finalize if all tasks DONE.
+| Situation | Command |
+|-----------|---------|
+| `BLOCKED` with complete deps / stale lease | `task unblock <id> --reason "..."` (`--force` only if intentional) |
+| `REWORK` or `FAILED` after fix | `task resume <id>` |
+| Orphaned / lease-expired active task | `task recover <id>` |
+| Unsure why stuck | `task explain <id> --json` — follow `recovery_command` / `suggested_next_command` |
+| Manual JSON edit already happened | `reconcile --dry-run --json` then `reconcile --repair-invariants --json` |
+
+#### Interpret stop reasons / error codes
+
+| Stop / code | Meaning | Next action |
+|-------------|---------|-------------|
+| `plan_not_approved` | Plan gate | review + approve |
+| `awaiting_code_changes` | Active task needs code | edit → `implement` → execute-loop |
+| `awaiting_rework` | Verify failed; peers will not start | fix → `task resume` → execute-loop |
+| `awaiting_final_verification` | All tasks DONE | `finalize --json` |
+| `feature_completed` | Done | summarize and stop |
+| `no_executable_task` | Nothing schedulable | `task explain`, `reconcile`, or finalize |
+| `scheduling_paused` | Orphan/active lease pause | `task recover <id>` then continue |
+| `workflow_busy` | Another task holds the lease | finish/recover active task first |
+| `already_done` | Targeted DONE task | do not re-queue; pick another task or finalize |
+| `task_not_executable` | Bad target status | follow explain recovery |
+| `verification_command_unavailable` | Bad plan verifier | fix command in tasks.json before approve |
+
+#### Finalize incomplete work
+
+If `finalize --json` returns `not_all_tasks_done`, inspect `remaining_tasks[]`:
+- `id`, `status`, `blocker`, `block_kind`, `recovery_command`
+- Run the given recovery command, then re-run finalize after all tasks are DONE.
+
+`status --json` also surfaces `active_task_id`, `scheduling_paused_reason`, and `invariants`.
 
 ### 4) Diagnostics and Repair
 
 | Command | When |
 |---------|------|
-| `doctor --json` | Workspace health check (config, tasks, bundle, coverage, stale artifacts) |
-| `plan coverage --from PLAN.md --json` | PLAN → requirements → tasks gap analysis |
-| `task validate --json` | Syntax/schema check on tasks.json only |
-| `repair tasks --dry-run --json` | Diagnose tasks.json issues without writing |
-| `repair tasks --apply --json` | Safe repair with backup under `.feature/backups/` |
-| `task explain <id> --json` | Why a task is not ready |
-| `reconcile --dry-run --json` | Preview reconcile/promotion without saving |
-| `status --json` | Unified status (`completed`, `completion_ready`, `finalization`) |
+| `doctor --json` | Workspace health |
+| `plan coverage --from PLAN.md --json` | PLAN → requirements → tasks gaps |
+| `task validate --json` | tasks.json syntax/schema |
+| `repair tasks --dry-run --json` / `--apply --json` | Diagnose/repair tasks.json with backup |
+| `task explain <id> --json` | Blockers + recovery_command |
+| `reconcile --dry-run --json` | Proposed transitions, orphans, unblocks |
+| `status --json` | Unified status + lease + invariants |
+| `schema show <artifact> --json` | Canonical contracts |
 
 ### 5) Command-Driven Skill Routing
-- Run `go run ./cmd/feature-dev agent-hint --json` each cycle.
+- Each cycle: `go run ./cmd/feature-dev agent-hint --json`.
 - Follow `suggested_next_command` and `reason`.
-- Trust `status --json` and `agent-hint` over stale `last-validation.json` after finalize.
+- Prefer `status --json` / `agent-hint` over stale validation artifacts after finalize.
 
 ### 6) Cycle Output Contract
 For every cycle, report:
-1. current status/stop reason
-2. active task id and repository
+1. current status/stop reason (and error_code if present)
+2. active task id, repository, and lease/pause if any
 3. code changes performed
 4. verification command and result
-5. next command to run
+5. next command to run (prefer explain/agent-hint recovery commands)
 
 ## Guardrails
 - Avoid destructive git operations.
-- Keep edits scoped to current task.
-- Do not fabricate completion without CLI transition.
-- Do not infer approval from ambiguous phrases ("sounds good", "maybe", "probably fine").
+- Keep edits scoped to the current active task's repository.
+- Do not fabricate completion without a CLI transition.
+- Do not start a second task while one is `RUNNING`/`IMPLEMENTED`/`VERIFYING`.
+- Do not continue execute-loop after `awaiting_rework` without `task resume`.
+- Do not hand-edit task status; use `unblock` / `resume` / `recover`.
+- Do not infer approval from ambiguous phrases ("sounds good", "maybe").
 - Valid approval phrases: "approve", "approved", "go ahead with implementation", "looks good, proceed".
 - Do not bundle multiple PLAN requirements into one task without explicit user deferral.
+- Do not use placeholder repos (`repo-a`, `repo-b`) or unverified wrappers (`./mvnw` when missing).
 
 ## Suggested Invocation
 
@@ -298,7 +289,9 @@ Start from assets/PLAN-template.md conventions (one bullet per capability, req m
 Run plan scaffold --from PLAN.md, then fill requirements.json and tasks.json so that
 plan coverage --json passes completeness, decomposition, and traceability gates.
 Create at least one task per requirement with requirement_ids and repository-scoped
-verification (no cd repo && prefix). Do not modify production code during planning.
+verification that exists in that repo (no cd repo && prefix; no missing mvnw).
+Declare workspace-verify.json commands or cross_repo_verification_deferral when needed.
+Do not modify production code during planning.
 
 Then run:
   feature-dev plan coverage --from PLAN.md --json
@@ -307,16 +300,18 @@ Then run:
   feature-dev review --json
   feature-dev graph
 
-If coverage fails, fix requirements.json and tasks.json per agent_actions — do not clarify.
+If structural/coverage fails, fix JSON per schema show / agent_actions — do not clarify.
 If domain validation fails, run plan clarify --json, ask me targeted questions, and resubmit.
 
 Show me tasks.json, coverage_matrix, repo assignments, dependencies, and warnings.
 Wait for my explicit approval before implementation.
 
-After I approve, run feature-dev approve and execute-loop --json.
-When stopped with awaiting_code_changes, implement in the assigned repo, run
-feature-dev implement <task-id>, then execute-loop --json again.
-When all tasks are DONE, run feature-dev finalize --json.
+After I approve, run feature-dev approve, then reconcile && execute-loop --json.
+Keep at most one active task. On awaiting_code_changes: edit assigned repo,
+feature-dev implement <task-id>, then execute-loop again.
+On awaiting_rework: fix, feature-dev task resume <task-id>, then execute-loop again.
+On BLOCKED/orphan: task explain, then unblock/recover as suggested — never hand-edit status.
+When all tasks are DONE, run feature-dev finalize --json (use remaining_tasks recovery if incomplete).
 ```
 
 Short form:
